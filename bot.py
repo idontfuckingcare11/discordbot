@@ -36,6 +36,8 @@ logging.getLogger('nextcord').setLevel(logging.ERROR)
 logging.getLogger('nextcord.http').setLevel(logging.ERROR)
 logging.getLogger('nextcord.gateway').setLevel(logging.ERROR)
 logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
+if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
+    logging.disable(logging.WARNING)
 
 # (Timezone removed; siege/secret room features deleted)
 
