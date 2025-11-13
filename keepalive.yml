@@ -1,0 +1,22 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health endpoint
+        shell: bash
+        run: |
+          URL="${{ secrets.KEEPALIVE_URL }}"
+          if [ -z "$URL" ]; then
+            URL="https://discordbot-x15g.onrender.com/healthz"
+          fi
+          for i in {1..3}; do
+            curl -sS -m 20 -A "GitHubActionsKeepalive/1.0" "$URL" || true
+            sleep 5
+          done
