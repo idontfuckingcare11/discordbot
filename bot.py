@@ -401,6 +401,8 @@ async def siegelineup_cmd(ctx: commands.Context, *, text: str = ""):
     try:
         msg = await _create_lineup_message(ctx.channel, ctx.guild, "Siege Line-Up", text, ping_everyone=("@everyone" in text))
         ts = _extract_unix_timestamp(text)
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
         if ts:
             await _schedule_announcement(msg.id, ctx.channel, ts, "Guild Siege")
         # Try to delete invoking command for cleanliness
@@ -419,6 +421,8 @@ async def secretroomlineup_cmd(ctx: commands.Context, *, text: str = ""):
     try:
         msg = await _create_lineup_message(ctx.channel, ctx.guild, "Secret Room Line-Up", text, ping_everyone=("@everyone" in text))
         ts = _extract_unix_timestamp(text)
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
         if ts:
             await _schedule_announcement(msg.id, ctx.channel, ts, "Secret Room")
         try:
@@ -570,6 +574,32 @@ def _extract_unix_timestamp(text: str) -> int | None:
     except Exception:
         return None
 
+# Natural time parsing: "11am", "2 pm", "20:00", "8:30am" (Asia/Manila)
+TIME_SIMPLE_RE = re.compile(r"\b(?:(?:at|@)\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+
+def _infer_local_time_unix(text: str) -> int | None:
+    try:
+        t = text or ""
+        m = TIME_SIMPLE_RE.search(t)
+        if not m:
+            return None
+        hour = int(m.group(1))
+        minute = int(m.group(2) or "0")
+        ampm = (m.group(3) or "").lower()
+        if ampm:
+            hour = hour % 12
+            if ampm == "pm":
+                hour += 12
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            return None
+        now_local = dt.datetime.now(PH_TZ)
+        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now_local:
+            candidate = candidate + dt.timedelta(days=1)
+        return int(candidate.astimezone(dt.timezone.utc).timestamp())
+    except Exception:
+        return None
+
 # Slash command versions (may take time globally; prefix commands work instantly)
 try:
     from nextcord import SlashOption
@@ -623,6 +653,8 @@ try:
         await interaction.response.defer(ephemeral=True)
         msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
         ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
         if ts:
             await _schedule_announcement(msg.id, interaction.channel, ts, "Guild Siege")
         try:
@@ -639,6 +671,8 @@ try:
         await interaction.response.defer(ephemeral=True)
         msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
         ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
         if ts:
             await _schedule_announcement(msg.id, interaction.channel, ts, "Secret Room")
         try:
@@ -813,6 +847,9 @@ if __name__ == "__main__":
                 async def _root(_request):
                     return web.Response(text="OK")
                 app.router.add_get("/", _root)
+                app.router.add_route("HEAD", "/", _root)
+                app.router.add_get("/healthz", _root)
+                app.router.add_route("HEAD", "/healthz", _root)
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, "0.0.0.0", int(port_env or "8000"))
