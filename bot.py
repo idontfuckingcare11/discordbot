@@ -32,6 +32,10 @@ if sys.platform == "win32":
         pass
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logging.getLogger('nextcord').setLevel(logging.ERROR)
+logging.getLogger('nextcord.http').setLevel(logging.ERROR)
+logging.getLogger('nextcord.gateway').setLevel(logging.ERROR)
+logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
 # (Timezone removed; siege/secret room features deleted)
 
@@ -839,10 +843,7 @@ if __name__ == "__main__":
         
         async def _start_keepalive():
             try:
-                port_env = os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT")
-                flag = os.getenv("KEEP_ALIVE", "").strip().lower() in {"1","true","yes"}
-                if not (port_env or flag):
-                    return
+                port_env = os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT") or "10000"
                 app = web.Application()
                 async def _root(_request):
                     return web.Response(text="OK")
@@ -852,7 +853,7 @@ if __name__ == "__main__":
                 app.router.add_route("HEAD", "/healthz", _root)
                 runner = web.AppRunner(app)
                 await runner.setup()
-                site = web.TCPSite(runner, "0.0.0.0", int(port_env or "8000"))
+                site = web.TCPSite(runner, "0.0.0.0", int(port_env))
                 await site.start()
             except Exception:
                 pass
