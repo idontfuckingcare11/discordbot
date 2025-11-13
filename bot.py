@@ -7,6 +7,7 @@ import os
 import atexit
 import logging
 from aiohttp import web
+from zoneinfo import ZoneInfo
 import asyncio
 import datetime as dt
 import re
@@ -58,6 +59,7 @@ CREATOR_ROLE_NAME = os.getenv("CREATOR_ROLE_NAME", "CREATOR")  # Only members wi
 BOT_NICKNAME = os.getenv("BOT_NICKNAME", "").strip()  # Optional: set per-server nickname automatically
 # Guild-specific registration for instant slash command availability
 GUILD_ID = int(os.getenv("GUILD_ID", "1156881904394567751"))
+ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"))
 
 # (Removed siege/secret room schedules)
 
@@ -69,6 +71,20 @@ intents.members = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+START_TIME: dt.datetime | None = None
+ANNOUNCE_TASK: asyncio.Task | None = None
+PH_TZ = ZoneInfo("Asia/Manila")
+FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
+FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
+def _next_ffa_local() -> dt.datetime:
+    now_local = dt.datetime.now(PH_TZ)
+    candidates = [
+        now_local.replace(hour=h, minute=0, second=0, microsecond=0) for h in FFA_TIMES
+    ]
+    for c in candidates:
+        if c > now_local:
+            return c
+    return candidates[0] + dt.timedelta(days=1)
 
 # (Music feature removed)
 
@@ -100,6 +116,8 @@ def _member_has_creator_role(member: nextcord.Member) -> bool:
 # --- BOT EVENTS ---
 @bot.event
 async def on_ready():
+    global START_TIME
+    START_TIME = dt.datetime.now(dt.timezone.utc)
     print("\n" + "="*50, flush=True)
     print(f"[OK] Logged in as {bot.user}", flush=True)
     print(f"[OK] Bot ID: {bot.user.id}", flush=True)
@@ -117,8 +135,51 @@ async def on_ready():
             except Exception:
                 # Ignore if lacking permissions or API denies
                 print("    ⚠ Could not set nickname (missing permission?)", flush=True)
+        try:
+            synced = await bot.sync_application_commands(guild_id=guild.id)
+            print(f"    ✓ Synced {len(synced) if hasattr(synced,'__len__') else '?'} slash command(s) to this guild", flush=True)
+        except Exception:
+            print("    ⚠ Could not sync slash commands to this guild", flush=True)
     print("[INFO] Bot ready; siege/secret-room features removed.", flush=True)
     print("="*50 + "\n", flush=True)
+    try:
+        global ANNOUNCE_TASK
+        if not ANNOUNCE_TASK or ANNOUNCE_TASK.done():
+            async def _run():
+                while True:
+                    try:
+                        now_local = dt.datetime.now(PH_TZ)
+                        candidates = []
+                        for h in FFA_TIMES:
+                            candidates.append(now_local.replace(hour=h, minute=0, second=0, microsecond=0))
+                        next_time = None
+                        for c in candidates:
+                            if c > now_local:
+                                next_time = c
+                                break
+                        if not next_time:
+                            next_time = candidates[0] + dt.timedelta(days=1)
+                        delay = (next_time - now_local).total_seconds()
+                        if delay < 1:
+                            delay = 1
+                        await asyncio.sleep(delay)
+                        channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(ANNOUNCE_CHANNEL_ID)
+                            except Exception:
+                                channel = None
+                        if channel:
+                            try:
+                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                                await channel.send(FFA_MESSAGE, allowed_mentions=allowed)
+                            except Exception:
+                                pass
+                    except Exception:
+                        await asyncio.sleep(5)
+            ANNOUNCE_TASK = asyncio.create_task(_run())
+    except Exception:
+        pass
 
 
 @bot.event
@@ -367,6 +428,61 @@ async def secretroomlineup_cmd(ctx: commands.Context, *, text: str = ""):
     except Exception as e:
         await ctx.send(f"❌ Failed to create lineup: {e}")
 
+# --- STATUS ---
+def _format_uptime() -> str:
+    try:
+        if not START_TIME:
+            return "starting"
+        now = dt.datetime.now(dt.timezone.utc)
+        delta = now - START_TIME
+        s = int(delta.total_seconds())
+        d, r = divmod(s, 86400)
+        h, r = divmod(r, 3600)
+        m, r = divmod(r, 60)
+        parts = []
+        if d:
+            parts.append(f"{d}d")
+        if h:
+            parts.append(f"{h}h")
+        if m:
+            parts.append(f"{m}m")
+        parts.append(f"{r}s")
+        return " ".join(parts)
+    except Exception:
+        return "unknown"
+
+@bot.command(name="status")
+@commands.guild_only()
+async def status_cmd(ctx: commands.Context):
+    try:
+        embed = nextcord.Embed(title="Bot Status", color=0x3498db)
+        embed.add_field(name="Uptime", value=_format_uptime(), inline=True)
+        embed.add_field(name="Latency", value=f"{round(bot.latency*1000)} ms", inline=True)
+        embed.add_field(name="Servers", value=str(len(bot.guilds)), inline=True)
+        await ctx.send(embed=embed)
+    except Exception:
+        pass
+
+@bot.command(name="ping")
+@commands.guild_only()
+async def ping_cmd(ctx: commands.Context):
+    try:
+        await ctx.send(f"Pong {round(bot.latency*1000)} ms")
+    except Exception:
+        pass
+
+@bot.command(name="nextffa")
+@commands.guild_only()
+async def nextffa_cmd(ctx: commands.Context):
+    try:
+        nt = _next_ffa_local()
+        unix = int(nt.astimezone(dt.timezone.utc).timestamp())
+        msg = f"Next FFA: <t:{unix}:F> (<t:{unix}:R>) Asia/Manila"
+        allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+        await ctx.send(msg, allowed_mentions=allowed)
+    except Exception:
+        pass
+
 # --- CREATOR PANEL (buttons) ---
 class LineupPanel(nextcord.ui.View):
     def __init__(self):
@@ -496,7 +612,7 @@ try:
             except Exception:
                 await interaction.response.send_message("❌ Failed to post message. Check channel permissions.", ephemeral=True)
 
-    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup")
+    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup", guild_ids=[GUILD_ID])
     async def siegelineup(interaction: nextcord.Interaction, text: str = SlashOption(required=False, description="Extra text or rules"), ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")):
         # Permission check
         member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
@@ -514,7 +630,7 @@ try:
         except Exception:
             pass
 
-    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup")
+    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup", guild_ids=[GUILD_ID])
     async def secretroomlineup(interaction: nextcord.Interaction, text: str = SlashOption(required=False, description="Extra text or rules"), ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")):
         member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
         if not member or not _member_has_creator_role(member):
@@ -563,6 +679,60 @@ try:
             await interaction.delete_original_message()
         except Exception:
             pass
+
+    @bot.slash_command(name="status", description="Show bot status", guild_ids=[GUILD_ID])
+    async def status_slash(interaction: nextcord.Interaction):
+        try:
+            embed = nextcord.Embed(title="Bot Status", color=0x3498db)
+            embed.add_field(name="Uptime", value=_format_uptime(), inline=True)
+            embed.add_field(name="Latency", value=f"{round(bot.latency*1000)} ms", inline=True)
+            embed.add_field(name="Servers", value=str(len(bot.guilds)), inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("Failed to show status.", ephemeral=True)
+            except Exception:
+                pass
+
+    @bot.slash_command(name="pingpong", description="Latency pingpong", guild_ids=[GUILD_ID])
+    async def ping_slash(interaction: nextcord.Interaction):
+        try:
+            await interaction.response.send_message(f"PingPong {round(bot.latency*1000)} ms", ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("PingPong failed.", ephemeral=True)
+            except Exception:
+                pass
+
+    @bot.slash_command(name="nextffa", description="Show next FFA announcement time (PH)", guild_ids=[GUILD_ID])
+    async def nextffa_slash(interaction: nextcord.Interaction):
+        try:
+            nt = _next_ffa_local()
+            unix = int(nt.astimezone(dt.timezone.utc).timestamp())
+            msg = f"Next FFA: <t:{unix}:F> (<t:{unix}:R>) Asia/Manila"
+            await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("Failed to calculate next FFA.", ephemeral=True)
+            except Exception:
+                pass
+
+    @bot.slash_command(name="cmds", description="List registered commands", guild_ids=[GUILD_ID])
+    async def cmds_slash(interaction: nextcord.Interaction):
+        try:
+            items = []
+            try:
+                cmds = await bot.fetch_application_commands(guild_id=interaction.guild.id)
+                items = [c.name for c in cmds] if cmds else []
+            except Exception:
+                pass
+            text = (", ".join(items) or "none")
+            await interaction.response.send_message(f"Commands: {text}", ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("Failed to list commands.", ephemeral=True)
+            except Exception:
+                pass
 except Exception:
     # If slash support isn't available, prefix commands still work.
     pass
@@ -599,7 +769,11 @@ if __name__ == "__main__":
             except FileExistsError:
                 print("\n[ERROR] ❌ Another bot instance appears to be running (lock file present).", flush=True)
                 print(f"[HELP] If no other instance is running, delete: {LOCK_FILE}", flush=True)
-                input("\nPress Enter to exit...")
+                try:
+                    if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
+                        input("\nPress Enter to exit...")
+                except Exception:
+                    pass
                 sys.exit(1)
         else:
             # Non-strict mode: best-effort cleanup of existing lock and proceed
@@ -622,7 +796,11 @@ if __name__ == "__main__":
             print("  • Create a .env file with: DISCORD_TOKEN=your_token", flush=True)
             print("  • Or create 'bot_token.txt' beside bot.py containing only your token", flush=True)
             print("[HELP] Get your token from: https://discord.com/developers/applications", flush=True)
-            input("\nPress Enter to exit...")
+            try:
+                if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
+                    input("\nPress Enter to exit...")
+            except Exception:
+                pass
             sys.exit(1)
         
         async def _start_keepalive():
@@ -653,7 +831,11 @@ if __name__ == "__main__":
         print("\n[ERROR] ❌ Login failed! Invalid bot token.", flush=True)
         print("[HELP] Your token is incorrect or has been reset.", flush=True)
         print("[HELP] Get a new token from: https://discord.com/developers/applications", flush=True)
-        input("\nPress Enter to exit...")
+        try:
+            if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
+                input("\nPress Enter to exit...")
+        except Exception:
+            pass
     except Exception as e:
         print(f"\n[ERROR] ❌ Failed to start bot: {e}", flush=True)
         print(f"[ERROR] Error type: {type(e).__name__}", flush=True)
@@ -663,4 +845,8 @@ if __name__ == "__main__":
         print("  1. Invalid bot token", flush=True)
         print("  2. Bot not invited to server", flush=True)
         print("  3. Missing intents enabled in Discord Developer Portal", flush=True)
-        input("\nPress Enter to exit...")
+        try:
+            if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
+                input("\nPress Enter to exit...")
+        except Exception:
+            pass
