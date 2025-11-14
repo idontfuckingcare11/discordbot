@@ -845,7 +845,7 @@ if __name__ == "__main__":
         
         async def _start_keepalive():
             try:
-                port_env = os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT") or "10000"
+                port_env = (os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT") or "10000").strip()
                 app = web.Application()
                 async def _root(_request):
                     return web.Response(text="OK")
@@ -857,12 +857,36 @@ if __name__ == "__main__":
                 await runner.setup()
                 site = web.TCPSite(runner, "0.0.0.0", int(port_env))
                 await site.start()
+                try:
+                    print(f"[HEALTH] Keepalive listening on 0.0.0.0:{port_env} (/, /healthz)", flush=True)
+                except Exception:
+                    pass
             except Exception:
-                pass
+                try:
+                    import traceback
+                    print("[HEALTH] Failed to start keepalive server", flush=True)
+                    traceback.print_exc()
+                except Exception:
+                    pass
 
         async def _main():
             await _start_keepalive()
-            await bot.start(TOKEN)
+            while True:
+                try:
+                    await bot.start(TOKEN)
+                    break
+                except nextcord.errors.LoginFailure:
+                    try:
+                        print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(300)
+                except Exception as e:
+                    try:
+                        print(f"[ERROR] Bot start failed: {e}; retrying in 30s", flush=True)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(30)
 
         asyncio.run(_main())
     except KeyboardInterrupt:
