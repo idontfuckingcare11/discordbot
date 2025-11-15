@@ -40,7 +40,6 @@ if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
     logging.disable(logging.WARNING)
 
 # (Timezone removed; siege/secret room features deleted)
-
 # --- CONFIGURATION ---
 # Token is read from environment (recommended) to avoid hardcoding secrets.
 # Set `DISCORD_TOKEN` in your environment or a .env file.
@@ -850,9 +849,15 @@ if __name__ == "__main__":
                 async def _root(_request):
                     return web.Response(text="OK")
                 app.router.add_get("/", _root)
-                app.router.add_route("HEAD", "/", _root)
+                try:
+                    app.router.add_route("HEAD", "/", _root)
+                except Exception:
+                    pass
                 app.router.add_get("/healthz", _root)
-                app.router.add_route("HEAD", "/healthz", _root)
+                try:
+                    app.router.add_route("HEAD", "/healthz", _root)
+                except Exception:
+                    pass
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, "0.0.0.0", int(port_env))
