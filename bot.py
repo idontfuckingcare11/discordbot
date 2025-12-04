@@ -199,15 +199,14 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
-                        hours = [20, 2]
-                        candidates = [now_local.replace(hour=h, minute=0, second=0, microsecond=0) for h in hours]
-                        next_time = None
-                        for c in candidates:
-                            if c > now_local:
-                                next_time = c
-                                break
-                        if not next_time:
-                            next_time = candidates[0] + dt.timedelta(days=1)
+                        times = [(20, 30), (2, 30)]
+                        candidates = []
+                        for h, m in times:
+                            t = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
+                            if t <= now_local:
+                                t = t + dt.timedelta(days=1)
+                            candidates.append(t)
+                        next_time = min(candidates)
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
                         channel = bot.get_channel(SIEGE_CHANNEL_ID)
@@ -220,7 +219,7 @@ async def on_ready():
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
                                 try:
-                                    when_unix = int(dt.datetime.now(dt.timezone.utc).timestamp()) + 3600
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800
                                     await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
                                 except Exception:
                                     pass
@@ -257,7 +256,7 @@ async def on_ready():
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=True)
                                 try:
-                                    when_unix = int(dt.datetime.now(dt.timezone.utc).timestamp()) + 3600
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600
                                     await _schedule_announcement(msg.id, channel, when_unix, "Secret Room")
                                 except Exception:
                                     pass
