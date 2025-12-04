@@ -218,7 +218,12 @@ async def on_ready():
                                 channel = None
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
-                                await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=False)
+                                msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
+                                try:
+                                    when_unix = int(dt.datetime.now(dt.timezone.utc).timestamp()) + 3600
+                                    await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                     except Exception:
@@ -250,7 +255,12 @@ async def on_ready():
                                 channel = None
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
-                                await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=False)
+                                msg = await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=True)
+                                try:
+                                    when_unix = int(dt.datetime.now(dt.timezone.utc).timestamp()) + 3600
+                                    await _schedule_announcement(msg.id, channel, when_unix, "Secret Room")
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                     except Exception:
