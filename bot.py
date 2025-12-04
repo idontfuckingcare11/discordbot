@@ -66,6 +66,8 @@ BOT_NICKNAME = os.getenv("BOT_NICKNAME", "").strip()  # Optional: set per-server
 # Guild-specific registration for instant slash command availability
 GUILD_ID = int(os.getenv("GUILD_ID", "1156881904394567751"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"))
+SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
+SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
 
 # (Removed siege/secret room schedules)
 
@@ -79,6 +81,8 @@ intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 START_TIME: dt.datetime | None = None
 ANNOUNCE_TASK: asyncio.Task | None = None
+SIEGE_LINEUP_TASK: asyncio.Task | None = None
+SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
@@ -185,6 +189,73 @@ async def on_ready():
                     except Exception:
                         await asyncio.sleep(5)
             ANNOUNCE_TASK = asyncio.create_task(_run())
+    except Exception:
+        pass
+
+    try:
+        global SIEGE_LINEUP_TASK
+        if not SIEGE_LINEUP_TASK or SIEGE_LINEUP_TASK.done():
+            async def _siege_loop():
+                while True:
+                    try:
+                        now_local = dt.datetime.now(PH_TZ)
+                        hours = [20, 2]
+                        candidates = [now_local.replace(hour=h, minute=0, second=0, microsecond=0) for h in hours]
+                        next_time = None
+                        for c in candidates:
+                            if c > now_local:
+                                next_time = c
+                                break
+                        if not next_time:
+                            next_time = candidates[0] + dt.timedelta(days=1)
+                        delay = max(1, int((next_time - now_local).total_seconds()))
+                        await asyncio.sleep(delay)
+                        channel = bot.get_channel(SIEGE_CHANNEL_ID)
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(SIEGE_CHANNEL_ID)
+                            except Exception:
+                                channel = None
+                        if channel and hasattr(channel, "guild") and channel.guild:
+                            try:
+                                await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=False)
+                            except Exception:
+                                pass
+                    except Exception:
+                        await asyncio.sleep(5)
+            SIEGE_LINEUP_TASK = asyncio.create_task(_siege_loop())
+    except Exception:
+        pass
+
+    try:
+        global SECRET_ROOM_LINEUP_TASK
+        if not SECRET_ROOM_LINEUP_TASK or SECRET_ROOM_LINEUP_TASK.done():
+            async def _secret_room_loop():
+                while True:
+                    try:
+                        now_local = dt.datetime.now(PH_TZ)
+                        target_weekday = 2
+                        candidate = now_local.replace(hour=23, minute=0, second=0, microsecond=0)
+                        days_ahead = (target_weekday - now_local.weekday()) % 7
+                        if days_ahead == 0 and candidate <= now_local:
+                            days_ahead = 7
+                        next_time = candidate + dt.timedelta(days=days_ahead)
+                        delay = max(1, int((next_time - now_local).total_seconds()))
+                        await asyncio.sleep(delay)
+                        channel = bot.get_channel(SECRET_ROOM_CHANNEL_ID)
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(SECRET_ROOM_CHANNEL_ID)
+                            except Exception:
+                                channel = None
+                        if channel and hasattr(channel, "guild") and channel.guild:
+                            try:
+                                await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=False)
+                            except Exception:
+                                pass
+                    except Exception:
+                        await asyncio.sleep(5)
+            SECRET_ROOM_LINEUP_TASK = asyncio.create_task(_secret_room_loop())
     except Exception:
         pass
 
@@ -345,44 +416,7 @@ async def on_reaction_remove(reaction: nextcord.Reaction, user: nextcord.User):
     except Exception:
         pass
 
-# Prefix command version (instant availability)
-@bot.command(name="siegelineup")
-@has_creator_role()
-@commands.guild_only()
-async def siegelineup_cmd(ctx: commands.Context, *, text: str = ""):
-    try:
-        msg = await _create_lineup_message(ctx.channel, ctx.guild, "Siege Line-Up", text, ping_everyone=("@everyone" in text))
-        ts = _extract_unix_timestamp(text)
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, ctx.channel, ts, "Guild Siege")
-        # Try to delete invoking command for cleanliness
-        try:
-            await ctx.message.delete()
-        except Exception:
-            pass
-    except Exception as e:
-        await ctx.send(f"❌ Failed to create lineup: {e}")
-
-# Secret room lineup (prefix)
-@bot.command(name="secretroomlineup")
-@has_creator_role()
-@commands.guild_only()
-async def secretroomlineup_cmd(ctx: commands.Context, *, text: str = ""):
-    try:
-        msg = await _create_lineup_message(ctx.channel, ctx.guild, "Secret Room Line-Up", text, ping_everyone=("@everyone" in text))
-        ts = _extract_unix_timestamp(text)
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, ctx.channel, ts, "Secret Room")
-        try:
-            await ctx.message.delete()
-        except Exception:
-            pass
-    except Exception as e:
-        await ctx.send(f"❌ Failed to create lineup: {e}")
+ 
 
 # --- STATUS ---
 def _format_uptime() -> str:
@@ -635,43 +669,9 @@ try:
             except Exception:
                 await interaction.response.send_message("❌ Failed to post message. Check channel permissions.", ephemeral=True)
 
-    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup", guild_ids=[GUILD_ID])
-    async def siegelineup(interaction: nextcord.Interaction, text: str = SlashOption(required=False, description="Extra text or rules"), ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")):
-        # Permission check
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        # Defer ephemerally and post a regular channel message (no command header)
-        await interaction.response.defer(ephemeral=True)
-        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
-        ts = _extract_unix_timestamp(text or "")
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, interaction.channel, ts, "Guild Siege")
-        try:
-            await interaction.delete_original_message()
-        except Exception:
-            pass
+ 
 
-    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup", guild_ids=[GUILD_ID])
-    async def secretroomlineup(interaction: nextcord.Interaction, text: str = SlashOption(required=False, description="Extra text or rules"), ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
-        ts = _extract_unix_timestamp(text or "")
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, interaction.channel, ts, "Secret Room")
-        try:
-            await interaction.delete_original_message()
-        except Exception:
-            pass
+ 
 
     @bot.slash_command(name="postmessage", description="Post a message in the current channel", guild_ids=[GUILD_ID])
     async def postmessage_slash(
@@ -733,71 +733,8 @@ try:
         except Exception as e:
             await interaction.followup.send(f"❌ Failed to delete messages: {e}", ephemeral=True)
 
-    @bot.slash_command(name="del", description="Delete recent messages", guild_ids=[GUILD_ID])
-    async def del_slash(
-        interaction: nextcord.Interaction,
-        count: int = SlashOption(required=True, description="Number of messages to delete (1-100)")
-    ):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        if count < 1:
-            await interaction.response.send_message("❌ Provide a positive number.", ephemeral=True)
-            return
-        if count > 100:
-            count = 100
-        bot_member = interaction.guild.me if interaction.guild else None
-        perms = interaction.channel.permissions_for(bot_member) if bot_member else None
-        if not perms or not perms.manage_messages or not perms.read_message_history:
-            await interaction.response.send_message("❌ I need 'Manage Messages' and 'Read Message History' here.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        try:
-            deleted = await interaction.channel.purge(limit=count, check=lambda m: not m.pinned)
-            await interaction.followup.send(f"🧹 Deleted {len(deleted)} messages in this channel.", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to delete messages: {e}", ephemeral=True)
 
-    @bot.slash_command(name="worldboss", description="Start a 2-hour world boss timer", guild_ids=[GUILD_ID])
-    async def worldboss_slash(interaction: nextcord.Interaction):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        now = dt.datetime.now(dt.timezone.utc)
-        end = now + dt.timedelta(hours=2)
-        unix_end = int(end.timestamp())
-        mins = int(((end - now).total_seconds() + 59) // 60)
-        await interaction.response.send_message(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
-        async def _task():
-            try:
-                await asyncio.sleep(2*60*60)
-                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-            except Exception:
-                pass
-        asyncio.create_task(_task())
 
-    @bot.slash_command(name="wb", description="Start a 2-hour world boss timer", guild_ids=[GUILD_ID])
-    async def wb_slash(interaction: nextcord.Interaction):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        now = dt.datetime.now(dt.timezone.utc)
-        end = now + dt.timedelta(hours=2)
-        unix_end = int(end.timestamp())
-        mins = int(((end - now).total_seconds() + 59) // 60)
-        await interaction.response.send_message(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
-        async def _task():
-            try:
-                await asyncio.sleep(2*60*60)
-                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-            except Exception:
-                pass
-        asyncio.create_task(_task())
 
     @bot.slash_command(name="status", description="Show bot status", guild_ids=[GUILD_ID])
     async def status_slash(interaction: nextcord.Interaction):
@@ -813,15 +750,6 @@ try:
             except Exception:
                 pass
 
-    @bot.slash_command(name="pingpong", description="Latency pingpong", guild_ids=[GUILD_ID])
-    async def ping_slash(interaction: nextcord.Interaction):
-        try:
-            await interaction.response.send_message(f"PingPong {round(bot.latency*1000)} ms", ephemeral=True)
-        except Exception:
-            try:
-                await interaction.response.send_message("PingPong failed.", ephemeral=True)
-            except Exception:
-                pass
 
     @bot.slash_command(name="nextffa", description="Show next FFA announcement time (PH)", guild_ids=[GUILD_ID])
     async def nextffa_slash(interaction: nextcord.Interaction):
@@ -857,6 +785,15 @@ try:
             except Exception:
                 pass
             if not names:
+                try:
+                    for c in getattr(bot, "application_commands", []) or []:
+                        n = getattr(c, "name", "")
+                        d = getattr(c, "description", "")
+                        if n:
+                            names.setdefault(n, d)
+                except Exception:
+                    pass
+            if not names:
                 await interaction.response.send_message("Commands: none", ephemeral=True)
                 return
             items = []
@@ -870,21 +807,6 @@ try:
             except Exception:
                 pass
 
-    @bot.slash_command(name="reloadcmds", description="Reload slash commands for this guild", guild_ids=[GUILD_ID])
-    async def reloadcmds_slash(interaction: nextcord.Interaction):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        try:
-            synced = await bot.sync_application_commands(guild_id=interaction.guild.id)
-            count = (len(synced) if hasattr(synced, "__len__") else 0)
-            await interaction.response.send_message(f"✅ Synced {count} slash command(s).", ephemeral=True)
-        except Exception:
-            try:
-                await interaction.response.send_message("❌ Failed to sync commands.", ephemeral=True)
-            except Exception:
-                pass
 except Exception:
     # If slash support isn't available, prefix commands still work.
     pass
