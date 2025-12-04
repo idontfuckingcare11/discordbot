@@ -962,9 +962,7 @@ if __name__ == "__main__":
                 async def _root(_request):
                     return web.Response(text="OK")
                 app.router.add_get("/", _root)
-                app.router.add_route("HEAD", "/", _root)
                 app.router.add_get("/healthz", _root)
-                app.router.add_route("HEAD", "/healthz", _root)
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, "0.0.0.0", int(port_env))
