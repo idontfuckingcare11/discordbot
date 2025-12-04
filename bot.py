@@ -40,6 +40,7 @@ if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
     logging.disable(logging.WARNING)
 
 # (Timezone removed; siege/secret room features deleted)
+
 # --- CONFIGURATION ---
 # Token is read from environment (recommended) to avoid hardcoding secrets.
 # Set `DISCORD_TOKEN` in your environment or a .env file.
@@ -81,6 +82,7 @@ ANNOUNCE_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
+WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -492,6 +494,47 @@ async def nextffa_cmd(ctx: commands.Context):
     except Exception:
         pass
 
+@bot.command(name="worldboss")
+@has_creator_role()
+@commands.guild_only()
+async def worldboss_cmd(ctx: commands.Context):
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        end = now + dt.timedelta(hours=2)
+        unix_end = int(end.timestamp())
+        mins = int(((end - now).total_seconds() + 59) // 60)
+        await ctx.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)")
+        async def _task():
+            try:
+                await asyncio.sleep(2*60*60)
+                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                await ctx.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
+            except Exception:
+                pass
+        asyncio.create_task(_task())
+    except Exception:
+        pass
+
+@bot.command(name="reloadcmds")
+@has_creator_role()
+@commands.guild_only()
+async def reloadcmds_cmd(ctx: commands.Context):
+    try:
+        synced = await bot.sync_application_commands(guild_id=ctx.guild.id)
+        try:
+            msg = await ctx.send(f"✅ Synced {len(synced) if hasattr(synced,'__len__') else 0} slash command(s).")
+            await asyncio.sleep(5)
+            await msg.delete()
+        except Exception:
+            pass
+    except Exception:
+        try:
+            err = await ctx.send("❌ Failed to sync commands.")
+            await asyncio.sleep(5)
+            await err.delete()
+        except Exception:
+            pass
+
 # --- CREATOR PANEL (buttons) ---
 class LineupPanel(nextcord.ui.View):
     def __init__(self):
@@ -719,6 +762,98 @@ try:
         except Exception:
             pass
 
+    @bot.slash_command(name="delete", description="Delete recent messages", guild_ids=[GUILD_ID])
+    async def delete_slash(
+        interaction: nextcord.Interaction,
+        count: int = SlashOption(required=True, description="Number of messages to delete (1-100)")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        if count < 1:
+            await interaction.response.send_message("❌ Provide a positive number.", ephemeral=True)
+            return
+        if count > 100:
+            count = 100
+        bot_member = interaction.guild.me if interaction.guild else None
+        perms = interaction.channel.permissions_for(bot_member) if bot_member else None
+        if not perms or not perms.manage_messages or not perms.read_message_history:
+            await interaction.response.send_message("❌ I need 'Manage Messages' and 'Read Message History' here.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            deleted = await interaction.channel.purge(limit=count, check=lambda m: not m.pinned)
+            await interaction.followup.send(f"🧹 Deleted {len(deleted)} messages in this channel.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to delete messages: {e}", ephemeral=True)
+
+    @bot.slash_command(name="del", description="Delete recent messages", guild_ids=[GUILD_ID])
+    async def del_slash(
+        interaction: nextcord.Interaction,
+        count: int = SlashOption(required=True, description="Number of messages to delete (1-100)")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        if count < 1:
+            await interaction.response.send_message("❌ Provide a positive number.", ephemeral=True)
+            return
+        if count > 100:
+            count = 100
+        bot_member = interaction.guild.me if interaction.guild else None
+        perms = interaction.channel.permissions_for(bot_member) if bot_member else None
+        if not perms or not perms.manage_messages or not perms.read_message_history:
+            await interaction.response.send_message("❌ I need 'Manage Messages' and 'Read Message History' here.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            deleted = await interaction.channel.purge(limit=count, check=lambda m: not m.pinned)
+            await interaction.followup.send(f"🧹 Deleted {len(deleted)} messages in this channel.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to delete messages: {e}", ephemeral=True)
+
+    @bot.slash_command(name="worldboss", description="Start a 2-hour world boss timer", guild_ids=[GUILD_ID])
+    async def worldboss_slash(interaction: nextcord.Interaction):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        now = dt.datetime.now(dt.timezone.utc)
+        end = now + dt.timedelta(hours=2)
+        unix_end = int(end.timestamp())
+        mins = int(((end - now).total_seconds() + 59) // 60)
+        await interaction.response.send_message(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
+        async def _task():
+            try:
+                await asyncio.sleep(2*60*60)
+                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
+            except Exception:
+                pass
+        asyncio.create_task(_task())
+
+    @bot.slash_command(name="wb", description="Start a 2-hour world boss timer", guild_ids=[GUILD_ID])
+    async def wb_slash(interaction: nextcord.Interaction):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        now = dt.datetime.now(dt.timezone.utc)
+        end = now + dt.timedelta(hours=2)
+        unix_end = int(end.timestamp())
+        mins = int(((end - now).total_seconds() + 59) // 60)
+        await interaction.response.send_message(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
+        async def _task():
+            try:
+                await asyncio.sleep(2*60*60)
+                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
+            except Exception:
+                pass
+        asyncio.create_task(_task())
+
     @bot.slash_command(name="status", description="Show bot status", guild_ids=[GUILD_ID])
     async def status_slash(interaction: nextcord.Interaction):
         try:
@@ -770,6 +905,22 @@ try:
         except Exception:
             try:
                 await interaction.response.send_message("Failed to list commands.", ephemeral=True)
+            except Exception:
+                pass
+
+    @bot.slash_command(name="reloadcmds", description="Reload slash commands for this guild", guild_ids=[GUILD_ID])
+    async def reloadcmds_slash(interaction: nextcord.Interaction):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        try:
+            synced = await bot.sync_application_commands(guild_id=interaction.guild.id)
+            count = (len(synced) if hasattr(synced, "__len__") else 0)
+            await interaction.response.send_message(f"✅ Synced {count} slash command(s).", ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("❌ Failed to sync commands.", ephemeral=True)
             except Exception:
                 pass
 except Exception:
@@ -849,15 +1000,9 @@ if __name__ == "__main__":
                 async def _root(_request):
                     return web.Response(text="OK")
                 app.router.add_get("/", _root)
-                try:
-                    app.router.add_route("HEAD", "/", _root)
-                except Exception:
-                    pass
+                app.router.add_route("HEAD", "/", _root)
                 app.router.add_get("/healthz", _root)
-                try:
-                    app.router.add_route("HEAD", "/healthz", _root)
-                except Exception:
-                    pass
+                app.router.add_route("HEAD", "/healthz", _root)
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, "0.0.0.0", int(port_env))
