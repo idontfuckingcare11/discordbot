@@ -240,61 +240,6 @@ async def post_message(ctx, *, message: str = None):
 
 # (Music commands removed)
 
-@bot.command(name="deletemessage")
-@has_creator_role()
-@commands.guild_only()
-async def deletemessage(ctx, count: int):
-    """Delete the last <count> messages in this channel (CREATOR only)."""
-    if count < 1:
-        try:
-            warn = await ctx.send("❌ Provide a positive number (e.g., !deletemessage 100).")
-            await asyncio.sleep(5)
-            await warn.delete()
-        except Exception:
-            pass
-        return
-
-    # Cap to 100 messages per run for safety
-    if count > 100:
-        count = 100
-
-    # Delete the invoking command message, if possible
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    # Check bot permissions
-    try:
-        bot_member = ctx.guild.me if ctx.guild else None
-        perms = ctx.channel.permissions_for(bot_member) if bot_member else None
-        if not perms or not perms.manage_messages or not perms.read_message_history:
-            warn = await ctx.send("❌ I need 'Manage Messages' and 'Read Message History' here.")
-            await asyncio.sleep(5)
-            try:
-                await warn.delete()
-            except Exception:
-                pass
-            return
-    except Exception:
-        pass
-
-    # Purge messages in this channel (skips pinned)
-    try:
-        deleted = await ctx.channel.purge(limit=count, check=lambda m: not m.pinned)
-        try:
-            confirm = await ctx.send(f"🧹 Deleted {len(deleted)} messages in this channel.")
-            await asyncio.sleep(3)
-            await confirm.delete()
-        except Exception:
-            pass
-    except Exception as e:
-        try:
-            err = await ctx.send(f"❌ Failed to delete messages: {e}")
-            await asyncio.sleep(5)
-            await err.delete()
-        except Exception:
-            pass
 
 # --- LINEUP SYSTEM ---
 # Track active line-ups by message ID
@@ -891,17 +836,34 @@ try:
             except Exception:
                 pass
 
-    @bot.slash_command(name="cmds", description="List registered commands", guild_ids=[GUILD_ID])
+    @bot.slash_command(name="cmds", description="List active slash commands", guild_ids=[GUILD_ID])
     async def cmds_slash(interaction: nextcord.Interaction):
         try:
-            items = []
+            names = {}
             try:
-                cmds = await bot.fetch_application_commands(guild_id=interaction.guild.id)
-                items = [c.name for c in cmds] if cmds else []
+                g = await bot.fetch_application_commands(guild_id=interaction.guild.id)
+                if g:
+                    for c in g:
+                        names[getattr(c, "name", "")] = getattr(c, "description", "")
             except Exception:
                 pass
-            text = (", ".join(items) or "none")
-            await interaction.response.send_message(f"Commands: {text}", ephemeral=True)
+            try:
+                glob = await bot.fetch_application_commands()
+                if glob:
+                    for c in glob:
+                        n = getattr(c, "name", "")
+                        if n and n not in names:
+                            names[n] = getattr(c, "description", "")
+            except Exception:
+                pass
+            if not names:
+                await interaction.response.send_message("Commands: none", ephemeral=True)
+                return
+            items = []
+            for n in sorted(names.keys(), key=lambda x: x.lower()):
+                d = names.get(n) or ""
+                items.append(f"/{n}" + (f" — {d}" if d else ""))
+            await interaction.response.send_message("\n".join(items), ephemeral=True)
         except Exception:
             try:
                 await interaction.response.send_message("Failed to list commands.", ephemeral=True)
