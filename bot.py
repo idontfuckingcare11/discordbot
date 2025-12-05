@@ -904,23 +904,56 @@ try:
         except Exception:
             return None
 
+    def _normalize_yt_url(u: str) -> str:
+        try:
+            s = (u or "").strip()
+            if "youtube.com/shorts/" in s:
+                m = re.search(r"shorts/([A-Za-z0-9_-]{6,})", s)
+                if m:
+                    return f"https://www.youtube.com/watch?v={m.group(1)}"
+            if "youtu.be/" in s:
+                m = re.search(r"youtu\.be/([A-Za-z0-9_-]{6,})", s)
+                if m:
+                    return f"https://www.youtube.com/watch?v={m.group(1)}"
+            return s
+        except Exception:
+            return u
+
     def _yt_info(url: str) -> dict | None:
         try:
             if yt_dlp is None:
                 return None
+            u = _normalize_yt_url(url)
             ydl_opts = {
                 "format": "bestaudio/best",
                 "noplaylist": True,
                 "quiet": True,
-                "default_search": "auto",
+                "default_search": "ytsearch",
+                "nocheckcertificate": True,
+                "geo_bypass": True,
+                "extractor_retries": 3,
+                "http_headers": {"User-Agent": "Mozilla/5.0"},
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+                info = ydl.extract_info(u, download=False)
                 if info and "entries" in info:
                     info = info["entries"][0]
                 return info
         except Exception:
-            return None
+            try:
+                ydl_opts2 = {
+                    "format": "bestaudio/best",
+                    "noplaylist": True,
+                    "quiet": True,
+                    "default_search": "ytsearch",
+                }
+                with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if info and "entries" in info:
+                        info = info["entries"][0]
+                    return info
+            except Exception:
+                return None
 
     async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
         try:
@@ -981,7 +1014,7 @@ try:
             return
         info = _yt_info(youtube_link)
         if not info:
-            await interaction.followup.send("❌ Invalid or unsupported YouTube link.", ephemeral=True)
+            await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
             return
         url = info.get("url")
         title = info.get("title")
