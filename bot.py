@@ -838,28 +838,37 @@ try:
             MUSIC_QUEUES[gid] = []
         return MUSIC_QUEUES[gid]
 
+    async def _reply_interaction(interaction: nextcord.Interaction, text: str):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(text, ephemeral=True)
+            else:
+                await interaction.followup.send(text, ephemeral=True)
+        except Exception:
+            pass
+
     async def _ensure_voice(interaction: nextcord.Interaction) -> nextcord.VoiceClient | None:
         try:
             if not VOICE_OK:
-                await interaction.response.send_message("❌ Voice not supported. Install PyNaCl.", ephemeral=True)
+                await _reply_interaction(interaction, "❌ Voice not supported. Install PyNaCl.")
                 return None
             member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
             if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
-                await interaction.response.send_message("❌ You are not in a voice channel.", ephemeral=True)
+                await _reply_interaction(interaction, "❌ You are not in a voice channel.")
                 return None
             # Permission check before attempting connection
             bot_member = interaction.guild.me if interaction.guild else None
             ch = member.voice.channel
             try:
                 if isinstance(ch, nextcord.StageChannel):
-                    await interaction.response.send_message("❌ Stage channels are not supported for music. Please use a normal voice channel.", ephemeral=True)
+                    await _reply_interaction(interaction, "❌ Stage channels are not supported for music. Please use a normal voice channel.")
                     return None
             except Exception:
                 pass
             try:
                 perms = ch.permissions_for(bot_member) if bot_member else None
                 if not perms or not perms.connect or not perms.speak:
-                    await interaction.response.send_message("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
+                    await _reply_interaction(interaction, "❌ I need 'Connect' and 'Speak' permissions in your voice channel.")
                     return None
             except Exception:
                 pass
@@ -868,16 +877,21 @@ try:
                 return vc
             if vc and vc.is_connected():
                 try:
-                    await vc.move_to(member.voice.channel)
+                    try:
+                        await vc.move_to(member.voice.channel)
+                    except RuntimeError:
+                        fut = asyncio.run_coroutine_threadsafe(vc.move_to(member.voice.channel), bot.loop)
+                        fut.result(timeout=10)
                     return vc
                 except Exception:
-                    try:
-                        await interaction.response.send_message("❌ Failed to move to your voice channel.", ephemeral=True)
-                    except Exception:
-                        pass
+                    await _reply_interaction(interaction, "❌ Failed to move to your voice channel.")
                     return None
             try:
-                vc = await member.voice.channel.connect()
+                try:
+                    vc = await member.voice.channel.connect()
+                except RuntimeError:
+                    fut = asyncio.run_coroutine_threadsafe(member.voice.channel.connect(), bot.loop)
+                    vc = fut.result(timeout=10)
                 return vc
             except Exception as e:
                 err_text = f"❌ Failed to join voice channel: {type(e).__name__}: {e}"
@@ -885,7 +899,7 @@ try:
                     err_text += "\n• Check bot 'Connect' and 'Speak' permissions\n• Ensure channel isn't full\n• Avoid Stage channels"
                 except Exception:
                     pass
-                await interaction.response.send_message(err_text, ephemeral=True)
+                await _reply_interaction(interaction, err_text)
                 return None
         except Exception:
             return None
