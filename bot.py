@@ -843,6 +843,16 @@ try:
             if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
                 await interaction.response.send_message("❌ You are not in a voice channel.", ephemeral=True)
                 return None
+            # Permission check before attempting connection
+            bot_member = interaction.guild.me if interaction.guild else None
+            ch = member.voice.channel
+            try:
+                perms = ch.permissions_for(bot_member) if bot_member else None
+                if not perms or not perms.connect or not perms.speak:
+                    await interaction.response.send_message("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
+                    return None
+            except Exception:
+                pass
             vc = interaction.guild.voice_client
             if vc and vc.channel.id == member.voice.channel.id:
                 return vc
@@ -856,7 +866,12 @@ try:
                 vc = await member.voice.channel.connect()
                 return vc
             except Exception:
-                await interaction.response.send_message("❌ Failed to join voice channel.", ephemeral=True)
+                err_text = "❌ Failed to join voice channel."
+                try:
+                    err_text += " Check channel permissions and that the channel isn't full."
+                except Exception:
+                    pass
+                await interaction.response.send_message(err_text, ephemeral=True)
                 return None
         except Exception:
             return None
