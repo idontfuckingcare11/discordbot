@@ -924,7 +924,22 @@ try:
             if yt_dlp is None:
                 return None
             u = _normalize_yt_url(url)
-            ydl_opts = {
+            # Optional cookie support via env (base64 of Netscape cookie file)
+            cookiefile = None
+            try:
+                import base64, tempfile
+                b64 = os.getenv("YT_DLP_COOKIES_B64")
+                if b64:
+                    raw = base64.b64decode(b64)
+                    f = tempfile.NamedTemporaryFile(delete=False)
+                    f.write(raw)
+                    f.flush()
+                    f.close()
+                    cookiefile = f.name
+            except Exception:
+                pass
+
+            common = {
                 "format": "bestaudio/best",
                 "noplaylist": True,
                 "quiet": True,
@@ -932,28 +947,45 @@ try:
                 "nocheckcertificate": True,
                 "geo_bypass": True,
                 "extractor_retries": 3,
-                "http_headers": {"User-Agent": "Mozilla/5.0"},
+                "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"},
             }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(u, download=False)
-                if info and "entries" in info:
-                    info = info["entries"][0]
-                return info
-        except Exception:
+            if cookiefile:
+                common["cookiefile"] = cookiefile
+
+            attempts = [
+                {"extractor_args": {"youtube": {"player_client": ["default"]}}},
+                {"extractor_args": {"youtube": {"player_client": ["ios"]}}},
+                {"extractor_args": {"youtube": {"player_client": ["android"]}}},
+                {"extractor_args": {"youtube": {"player_client": ["web"]}}},
+            ]
+            for a in attempts:
+                opts = dict(common)
+                opts.update(a)
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(u, download=False)
+                        if info and "entries" in info:
+                            info = info["entries"][0]
+                        if info:
+                            return info
+                except Exception:
+                    continue
+            # Final fallback: treat input as search query
             try:
-                ydl_opts2 = {
-                    "format": "bestaudio/best",
-                    "noplaylist": True,
-                    "quiet": True,
-                    "default_search": "ytsearch",
-                }
-                with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
-                    info = ydl.extract_info(url, download=False)
+                fallback = dict(common)
+                with yt_dlp.YoutubeDL(fallback) as ydl:
+                    info = ydl.extract_info(u, download=False)
                     if info and "entries" in info:
                         info = info["entries"][0]
                     return info
             except Exception:
                 return None
+        finally:
+            try:
+                if cookiefile and os.path.exists(cookiefile):
+                    os.remove(cookiefile)
+            except Exception:
+                pass
 
     async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
         try:
