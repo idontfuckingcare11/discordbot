@@ -968,8 +968,13 @@ try:
 
     @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
     async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
         if yt_dlp is None:
-            await interaction.response.send_message("❌ yt-dlp is not installed.", ephemeral=True)
+            await interaction.followup.send("❌ yt-dlp is not installed.", ephemeral=True)
             return
         vc = await _ensure_voice(interaction)
         if not vc:
@@ -978,10 +983,6 @@ try:
         if not info:
             await interaction.followup.send("❌ Invalid or unsupported YouTube link.", ephemeral=True)
             return
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
         url = info.get("url")
         title = info.get("title")
         q = _get_queue(interaction.guild.id)
