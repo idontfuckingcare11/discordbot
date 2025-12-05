@@ -21,6 +21,10 @@ try:
     VOICE_OK = True
 except Exception:
     VOICE_OK = False
+try:
+    import imageio_ffmpeg as _iioff
+except Exception:
+    _iioff = None
 
 try:
     # Optional .env loader if available
@@ -97,7 +101,7 @@ PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
 WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
-FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+FFMPEG_PATH = (os.getenv("FFMPEG_PATH") or (_iioff.get_ffmpeg_exe() if _iioff else "ffmpeg"))
 MUSIC_QUEUES: dict[int, list[dict]] = {}
 MUSIC_NOW: dict[int, dict] = {}
 def _next_ffa_local() -> dt.datetime:
@@ -950,6 +954,10 @@ try:
         if not info:
             await interaction.followup.send("❌ Invalid or unsupported YouTube link.", ephemeral=True)
             return
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
         url = info.get("url")
         title = info.get("title")
         q = _get_queue(interaction.guild.id)
