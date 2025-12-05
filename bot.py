@@ -851,6 +851,12 @@ try:
             bot_member = interaction.guild.me if interaction.guild else None
             ch = member.voice.channel
             try:
+                if isinstance(ch, nextcord.StageChannel):
+                    await interaction.response.send_message("❌ Stage channels are not supported for music. Please use a normal voice channel.", ephemeral=True)
+                    return None
+            except Exception:
+                pass
+            try:
                 perms = ch.permissions_for(bot_member) if bot_member else None
                 if not perms or not perms.connect or not perms.speak:
                     await interaction.response.send_message("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
@@ -865,14 +871,18 @@ try:
                     await vc.move_to(member.voice.channel)
                     return vc
                 except Exception:
-                    pass
+                    try:
+                        await interaction.response.send_message("❌ Failed to move to your voice channel.", ephemeral=True)
+                    except Exception:
+                        pass
+                    return None
             try:
                 vc = await member.voice.channel.connect()
                 return vc
-            except Exception:
-                err_text = "❌ Failed to join voice channel."
+            except Exception as e:
+                err_text = f"❌ Failed to join voice channel: {type(e).__name__}: {e}"
                 try:
-                    err_text += " Check channel permissions and that the channel isn't full."
+                    err_text += "\n• Check bot 'Connect' and 'Speak' permissions\n• Ensure channel isn't full\n• Avoid Stage channels"
                 except Exception:
                     pass
                 await interaction.response.send_message(err_text, ephemeral=True)
