@@ -1091,8 +1091,27 @@ try:
                     if err:
                         print(f"[MUSIC] Playback error: {err}", flush=True)
                     queue.pop(0)
-                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), bot.loop)
-                    fut.result(timeout=30)
+                    # Schedule the next play - _after runs in a thread, so we need run_coroutine_threadsafe
+                    # Get the event loop from the bot
+                    try:
+                        loop = bot.loop
+                        if loop and loop.is_running():
+                            fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), loop)
+                            # Don't wait for result in the callback thread, let it run
+                            fut.result(timeout=60)  # Increased timeout
+                        else:
+                            # If no loop, try to get it from asyncio
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), loop)
+                                    fut.result(timeout=60)
+                                else:
+                                    loop.run_until_complete(_play_next(guild_id, channel))
+                            except Exception:
+                                print("[MUSIC] Could not get event loop for _after callback", flush=True)
+                    except Exception as e:
+                        print(f"[MUSIC] Error scheduling next play in _after callback: {e}", flush=True)
                 except Exception as e:
                     print(f"[MUSIC] Error in _after callback: {e}", flush=True)
             try:
@@ -1169,21 +1188,40 @@ try:
                 await interaction.followup.send("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
                 return
             
-            # Connect to voice
+            # Connect to voice channel
+            target_channel = member.voice.channel
             vc = interaction.guild.voice_client
-            if vc and vc.channel.id == member.voice.channel.id:
-                pass  # Already connected
-            elif vc and vc.is_connected():
+            
+            try:
+                if vc and vc.channel and vc.channel.id == target_channel.id:
+                    # Already connected to the right channel
+                    pass
+                elif vc and vc.is_connected():
+                    # Move to new channel
+                    try:
+                        await vc.move_to(target_channel)
+                    except Exception:
+                        # If move fails, disconnect and reconnect
+                        try:
+                            await vc.disconnect(force=True)
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            pass
+                        vc = await target_channel.connect()
+                else:
+                    # Not connected, connect to channel
+                    vc = await target_channel.connect()
+            except Exception as e:
+                error_msg = str(e)
+                print(f"[MUSIC] Voice connection error: {error_msg}", flush=True)
+                # Try one more time with a clean disconnect
                 try:
-                    await vc.move_to(member.voice.channel)
-                except Exception as e:
-                    await interaction.followup.send(f"❌ Failed to move to your voice channel: {str(e)}", ephemeral=True)
-                    return
-            else:
-                try:
-                    vc = await member.voice.channel.connect()
-                except Exception as e:
-                    await interaction.followup.send(f"❌ Failed to join voice channel: {str(e)}", ephemeral=True)
+                    if vc and vc.is_connected():
+                        await vc.disconnect(force=True)
+                        await asyncio.sleep(0.3)
+                    vc = await target_channel.connect()
+                except Exception as e2:
+                    await interaction.followup.send(f"❌ Failed to join voice channel. Error: {str(e2)[:200]}", ephemeral=True)
                     return
             
             await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
