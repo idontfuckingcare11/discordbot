@@ -1027,32 +1027,63 @@ try:
                 return
             item = queue[0]
             url = item.get("url") or item.get("source_url")
-            vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
-            if not vc:
-                return
-            audio = nextcord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
-            def _after(err):
+            if not url:
                 try:
+                    await channel.send("❌ No audio URL found for this item. Skipping...")
                     queue.pop(0)
-                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), bot.loop)
-                    fut.result()
+                    await _play_next(guild_id, channel)
                 except Exception:
                     pass
+                return
+            vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
+            if not vc or not vc.is_connected():
+                try:
+                    await channel.send("❌ Voice client not connected. Cannot play audio.")
+                except Exception:
+                    pass
+                return
             try:
-                vc.stop()
+                audio = nextcord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
+            except Exception as e:
+                try:
+                    await channel.send(f"❌ Failed to create audio source: {str(e)}")
+                    queue.pop(0)
+                    await _play_next(guild_id, channel)
+                except Exception:
+                    pass
+                return
+            def _after(err):
+                try:
+                    if err:
+                        print(f"[MUSIC] Playback error: {err}", flush=True)
+                    queue.pop(0)
+                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), bot.loop)
+                    fut.result(timeout=30)
+                except Exception as e:
+                    print(f"[MUSIC] Error in _after callback: {e}", flush=True)
+            try:
+                if vc.is_playing():
+                    vc.stop()
             except Exception:
                 pass
             try:
                 vc.play(audio, after=_after)
                 MUSIC_NOW[guild_id] = item
                 await channel.send(f"🎵 Now playing: {item.get('title') or 'Unknown'}")
-            except Exception:
+            except Exception as e:
                 try:
-                    await channel.send("❌ Failed to start playback.")
+                    await channel.send(f"❌ Failed to start playback: {str(e)}")
+                    queue.pop(0)
+                    await _play_next(guild_id, channel)
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                import traceback
+                print(f"[MUSIC] Error in _play_next: {e}", flush=True)
+                traceback.print_exc()
+            except Exception:
+                pass
 
     @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
     async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
@@ -1061,25 +1092,50 @@ try:
                 await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
-        if yt_dlp is None:
-            await interaction.followup.send("❌ yt-dlp is not installed.", ephemeral=True)
-            return
-        vc = await _ensure_voice(interaction)
-        if not vc:
-            return
-        info = _yt_info(youtube_link)
-        if not info:
-            await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
-            return
-        url = info.get("url")
-        title = info.get("title")
-        q = _get_queue(interaction.guild.id)
-        q.append({"title": title, "url": url, "webpage_url": info.get("webpage_url")})
-        if vc.is_playing():
-            await interaction.followup.send(f"➕ Added to queue: {title}", ephemeral=True)
-        else:
-            await interaction.followup.send(f"🎵 Starting: {title}", ephemeral=True)
-            await _play_next(interaction.guild.id, interaction.channel)
+        
+        try:
+            if yt_dlp is None:
+                await interaction.followup.send("❌ yt-dlp is not installed. Please install it with: `pip install yt-dlp`", ephemeral=True)
+                return
+            
+            if not VOICE_OK:
+                await interaction.followup.send("❌ Voice not supported. Please install PyNaCl: `pip install PyNaCl`", ephemeral=True)
+                return
+            
+            vc = await _ensure_voice(interaction)
+            if not vc:
+                return
+            
+            await interaction.followup.send("🔍 Fetching video info...", ephemeral=True)
+            info = _yt_info(youtube_link)
+            if not info:
+                await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
+                return
+            
+            url = info.get("url")
+            if not url:
+                await interaction.followup.send("❌ Failed to extract audio URL from video.", ephemeral=True)
+                return
+            
+            title = info.get("title", "Unknown")
+            q = _get_queue(interaction.guild.id)
+            q.append({"title": title, "url": url, "webpage_url": info.get("webpage_url"), "source_url": url})
+            
+            if vc.is_playing():
+                await interaction.followup.send(f"➕ Added to queue: {title}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"🎵 Starting: {title}", ephemeral=True)
+                await _play_next(interaction.guild.id, interaction.channel)
+        except Exception as e:
+            try:
+                error_msg = f"❌ Error: {str(e)}"
+                if len(error_msg) > 2000:
+                    error_msg = "❌ An error occurred while processing your request."
+                await interaction.followup.send(error_msg, ephemeral=True)
+            except Exception:
+                pass
+            import traceback
+            traceback.print_exc()
 
     @bot.slash_command(name="strskip", description="Skip current song", guild_ids=[GUILD_ID])
     async def strskip(interaction: nextcord.Interaction):
