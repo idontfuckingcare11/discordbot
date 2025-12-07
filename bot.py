@@ -942,7 +942,8 @@ try:
         except Exception:
             return u
 
-    def _yt_info(url: str) -> dict | None:
+    def _yt_info_sync(url: str) -> dict | None:
+        """Synchronous version of yt_info - runs in executor"""
         try:
             if yt_dlp is None:
                 return None
@@ -990,6 +991,11 @@ try:
                         if info and "entries" in info:
                             info = info["entries"][0]
                         if info:
+                            if cookiefile and os.path.exists(cookiefile):
+                                try:
+                                    os.remove(cookiefile)
+                                except Exception:
+                                    pass
                             return info
                 except Exception:
                     continue
@@ -1000,15 +1006,43 @@ try:
                     info = ydl.extract_info(u, download=False)
                     if info and "entries" in info:
                         info = info["entries"][0]
+                    if cookiefile and os.path.exists(cookiefile):
+                        try:
+                            os.remove(cookiefile)
+                        except Exception:
+                            pass
                     return info
             except Exception:
-                return None
-        finally:
-            try:
                 if cookiefile and os.path.exists(cookiefile):
+                    try:
+                        os.remove(cookiefile)
+                    except Exception:
+                        pass
+                return None
+        except Exception as e:
+            if cookiefile and os.path.exists(cookiefile):
+                try:
                     os.remove(cookiefile)
-            except Exception:
-                pass
+                except Exception:
+                    pass
+            return None
+
+    async def _yt_info(url: str) -> dict | None:
+        """Async wrapper that runs yt-dlp in executor to avoid blocking"""
+        try:
+            loop = asyncio.get_event_loop()
+            # Run the blocking operation in a thread pool with timeout
+            info = await asyncio.wait_for(
+                loop.run_in_executor(None, _yt_info_sync, url),
+                timeout=30.0  # 30 second timeout
+            )
+            return info
+        except asyncio.TimeoutError:
+            print("[MUSIC] yt-dlp extraction timed out", flush=True)
+            return None
+        except Exception as e:
+            print(f"[MUSIC] Error in _yt_info: {e}", flush=True)
+            return None
 
     async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
         try:
@@ -1087,11 +1121,13 @@ try:
 
     @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
     async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
+        # Defer response immediately to prevent timeout
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MUSIC] Error deferring response: {e}", flush=True)
+            return
         
         try:
             if yt_dlp is None:
@@ -1106,8 +1142,13 @@ try:
             if not vc:
                 return
             
-            await interaction.followup.send("🔍 Fetching video info...", ephemeral=True)
-            info = _yt_info(youtube_link)
+            try:
+                await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
+            except Exception:
+                pass
+            
+            # Use async version that won't block
+            info = await _yt_info(youtube_link)
             if not info:
                 await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
                 return
@@ -1135,6 +1176,7 @@ try:
             except Exception:
                 pass
             import traceback
+            print(f"[MUSIC] Error in strplay: {e}", flush=True)
             traceback.print_exc()
 
     @bot.slash_command(name="strskip", description="Skip current song", guild_ids=[GUILD_ID])
