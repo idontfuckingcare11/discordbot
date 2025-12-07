@@ -1121,15 +1121,28 @@ try:
 
     @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
     async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
-        # Defer response immediately to prevent timeout
+        # Defer response IMMEDIATELY - must be first thing, within 3 seconds
+        deferred = False
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
+                deferred = True
         except Exception as e:
+            # If defer fails, try to send error message directly
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ Failed to process command. Please try again.", ephemeral=True)
+            except Exception:
+                pass
             print(f"[MUSIC] Error deferring response: {e}", flush=True)
             return
         
+        # If we didn't defer, we can't use followup
+        if not deferred:
+            return
+        
         try:
+            # Check dependencies
             if yt_dlp is None:
                 await interaction.followup.send("❌ yt-dlp is not installed. Please install it with: `pip install yt-dlp`", ephemeral=True)
                 return
@@ -1138,14 +1151,42 @@ try:
                 await interaction.followup.send("❌ Voice not supported. Please install PyNaCl: `pip install PyNaCl`", ephemeral=True)
                 return
             
-            vc = await _ensure_voice(interaction)
-            if not vc:
+            # Check voice channel - but use followup for errors since we deferred
+            member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+            if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
+                await interaction.followup.send("❌ You are not in a voice channel.", ephemeral=True)
                 return
             
-            try:
-                await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
-            except Exception:
-                pass
+            # Check permissions
+            bot_member = interaction.guild.me if interaction.guild else None
+            ch = member.voice.channel
+            if isinstance(ch, nextcord.StageChannel):
+                await interaction.followup.send("❌ Stage channels are not supported for music. Please use a normal voice channel.", ephemeral=True)
+                return
+            
+            perms = ch.permissions_for(bot_member) if bot_member else None
+            if not perms or not perms.connect or not perms.speak:
+                await interaction.followup.send("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
+                return
+            
+            # Connect to voice
+            vc = interaction.guild.voice_client
+            if vc and vc.channel.id == member.voice.channel.id:
+                pass  # Already connected
+            elif vc and vc.is_connected():
+                try:
+                    await vc.move_to(member.voice.channel)
+                except Exception as e:
+                    await interaction.followup.send(f"❌ Failed to move to your voice channel: {str(e)}", ephemeral=True)
+                    return
+            else:
+                try:
+                    vc = await member.voice.channel.connect()
+                except Exception as e:
+                    await interaction.followup.send(f"❌ Failed to join voice channel: {str(e)}", ephemeral=True)
+                    return
+            
+            await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
             
             # Use async version that won't block
             info = await _yt_info(youtube_link)
