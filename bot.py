@@ -201,6 +201,12 @@ async def on_ready():
                         now_local = dt.datetime.now(PH_TZ)
                         candidates = []
                         
+                        # Find next 2:30am (every day)
+                        t = now_local.replace(hour=2, minute=30, second=0, microsecond=0)
+                        if t <= now_local:
+                            t = t + dt.timedelta(days=1)
+                        candidates.append(t)
+                        
                         # Find next Monday-Saturday at 8:00pm
                         for days_offset in range(8):
                             check_date = now_local + dt.timedelta(days=days_offset)
@@ -221,11 +227,11 @@ async def on_ready():
                                     break
                         
                         if not candidates:
-                            # Fallback: next Monday at 8pm
-                            days_to_monday = (7 - now_local.weekday()) % 7
-                            if days_to_monday == 0:
-                                days_to_monday = 7
-                            next_time = (now_local + dt.timedelta(days=days_to_monday)).replace(hour=20, minute=0, second=0, microsecond=0)
+                            # Fallback: next 2:30am
+                            t = now_local.replace(hour=2, minute=30, second=0, microsecond=0)
+                            if t <= now_local:
+                                t = t + dt.timedelta(days=1)
+                            next_time = t
                         else:
                             next_time = min(candidates)
                         
@@ -244,9 +250,13 @@ async def on_ready():
                                 msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
                                 try:
                                     # Schedule participant announcement
+                                    # 2:30am: announce at 3:00am (30 minutes later)
                                     # Sunday 10pm: announce at 11pm (1 hour later)
                                     # Mon-Sat 8pm: announce at 9pm (1 hour later)
-                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
+                                    if next_time.hour == 2 and next_time.minute == 30:
+                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800  # 30 minutes later
+                                    else:
+                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
                                     await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
                                 except Exception:
                                     pass
