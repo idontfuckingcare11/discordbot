@@ -563,6 +563,43 @@ async def reloadcmds_cmd(ctx: commands.Context):
         except Exception:
             pass
 
+@bot.command(name="siege845")
+@has_creator_role()
+@commands.guild_only()
+async def siege845_cmd(ctx: commands.Context):
+    """Manually create siege lineup for 8:45pm today with announcement"""
+    try:
+        # Get siege channel
+        channel = bot.get_channel(SIEGE_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(SIEGE_CHANNEL_ID)
+            except Exception:
+                channel = None
+        
+        if not channel or not hasattr(channel, "guild") or not channel.guild:
+            await ctx.send("❌ Could not access siege channel.")
+            return
+        
+        # Calculate 8:45pm today in PH timezone
+        now_local = dt.datetime.now(PH_TZ)
+        target_time = now_local.replace(hour=20, minute=45, second=0, microsecond=0)
+        # If 8:45pm already passed today, use tomorrow
+        if target_time <= now_local:
+            target_time = target_time + dt.timedelta(days=1)
+        
+        # Create lineup message with @everyone ping
+        msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
+        
+        # Schedule announcement for 8:45pm
+        when_unix = int(target_time.astimezone(dt.timezone.utc).timestamp())
+        await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
+        
+        unix_display = int(target_time.astimezone(dt.timezone.utc).timestamp())
+        await ctx.send(f"✅ Siege lineup posted! Announcement scheduled for <t:{unix_display}:F> (<t:{unix_display}:R>)")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to create siege lineup: {str(e)}")
+
 # --- CREATOR PANEL (buttons) ---
 class LineupPanel(nextcord.ui.View):
     def __init__(self):
@@ -1192,67 +1229,59 @@ try:
             target_channel = member.voice.channel
             vc = interaction.guild.voice_client
             
-            # Check current connection status
-            try:
-                # Get fresh voice client reference
-                vc = interaction.guild.voice_client
-                
-                if vc and vc.is_connected():
-                    # Bot is connected
-                    current_channel = vc.channel
-                    if current_channel and current_channel.id == target_channel.id:
-                        # Already in the correct channel - no action needed
-                        pass
-                    else:
-                        # Connected to different channel, try to move
-                        try:
-                            await vc.move_to(target_channel)
-                        except Exception as move_err:
-                            print(f"[MUSIC] Error moving to channel: {move_err}", flush=True)
-                            # If move fails, try disconnect and reconnect
-                            try:
-                                await vc.disconnect(force=True)
-                                await asyncio.sleep(0.3)
-                                vc = await target_channel.connect()
-                            except Exception as reconnect_err:
-                                error_msg = str(reconnect_err).lower()
-                                if "already connected" in error_msg:
-                                    # Re-check - might have reconnected automatically
-                                    vc = interaction.guild.voice_client
-                                    if not (vc and vc.is_connected() and vc.channel and vc.channel.id == target_channel.id):
-                                        await interaction.followup.send("❌ Could not move to your voice channel. Please try again.", ephemeral=True)
-                                        return
-                                else:
-                                    await interaction.followup.send(f"❌ Failed to join voice channel: {str(reconnect_err)[:200]}", ephemeral=True)
-                                    return
-                else:
-                    # Not connected, connect to channel
-                    try:
-                        vc = await target_channel.connect()
-                    except Exception as connect_err:
-                        error_msg = str(connect_err).lower()
-                        if "already connected" in error_msg:
-                            # Double-check connection status
-                            vc = interaction.guild.voice_client
-                            if vc and vc.is_connected() and vc.channel:
-                                if vc.channel.id == target_channel.id:
-                                    # Actually connected to right channel, continue
-                                    pass
-                                else:
-                                    await interaction.followup.send("❌ Bot is connected to a different voice channel. Please disconnect it first.", ephemeral=True)
-                                    return
-                            else:
-                                # Assume connected, continue
-                                vc = interaction.guild.voice_client
+            # Check if already connected to the same channel
+            already_connected = False
+            if vc:
+                try:
+                    # Check if connected and in the same channel
+                    if vc.is_connected() and vc.channel:
+                        if vc.channel.id == target_channel.id:
+                            already_connected = True
                         else:
-                            await interaction.followup.send(f"❌ Failed to join voice channel: {str(connect_err)[:200]}", ephemeral=True)
-                            return
-            except Exception as e:
-                # Final fallback - try to get voice client
-                vc = interaction.guild.voice_client
-                if not (vc and vc.is_connected()):
-                    await interaction.followup.send(f"❌ Voice connection error: {str(e)[:200]}", ephemeral=True)
-                    return
+                            # Connected to different channel, move to target
+                            try:
+                                await vc.move_to(target_channel)
+                                already_connected = True
+                            except Exception as move_err:
+                                print(f"[MUSIC] Error moving channel: {move_err}", flush=True)
+                                # If move fails, we'll reconnect below
+                                already_connected = False
+                except Exception:
+                    # If check fails, assume not connected
+                    already_connected = False
+            
+            # Connect if not already connected
+            if not already_connected:
+                try:
+                    # Disconnect first if connected to different channel
+                    if vc and vc.is_connected():
+                        try:
+                            await vc.disconnect(force=True)
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            pass
+                    
+                    # Connect to target channel
+                    vc = await target_channel.connect()
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    # If error says "already connected", check if it's to the right channel
+                    if "already connected" in error_msg:
+                        # Re-check connection status
+                        vc = interaction.guild.voice_client
+                        if vc and vc.is_connected() and vc.channel:
+                            if vc.channel.id == target_channel.id:
+                                # Actually connected to right channel, continue
+                                pass
+                            else:
+                                await interaction.followup.send(f"❌ Bot is connected to a different voice channel. Please disconnect it first or move to the same channel.", ephemeral=True)
+                                return
+                        else:
+                            # Strange state, try to continue
+                            pass
+                    else:
+                        await interaction.followup.send(f"❌ Failed to join voice channel. Error: {str(e)[:200]}", ephemeral=True)
+                        return
             
             await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
             
