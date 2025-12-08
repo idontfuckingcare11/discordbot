@@ -86,7 +86,7 @@ ANNOUNCE_TASK: asyncio.Task | None = None
 SIEGE_LINEUP_TASK: asyncio.Task | None = None
 SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
-FFA_TIMES = [0, 11, 14, 17, 20, 23]
+FFA_TIMES = [0, 11, 14, 17, 20]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
 WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
 def _next_ffa_local() -> dt.datetime:
