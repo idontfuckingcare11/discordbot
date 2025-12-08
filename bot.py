@@ -12,19 +12,7 @@ import asyncio
 import datetime as dt
 import re
 
-try:
-    import yt_dlp as yt_dlp
-except Exception:
-    yt_dlp = None
-try:
-    import nacl  # noqa: F401
-    VOICE_OK = True
-except Exception:
-    VOICE_OK = False
-try:
-    import imageio_ffmpeg as _iioff
-except Exception:
-    _iioff = None
+# Music features removed
 
 try:
     # Optional .env loader if available
@@ -101,9 +89,6 @@ PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
 WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
-FFMPEG_PATH = (os.getenv("FFMPEG_PATH") or (_iioff.get_ffmpeg_exe() if _iioff else "ffmpeg"))
-MUSIC_QUEUES: dict[int, list[dict]] = {}
-MUSIC_NOW: dict[int, dict] = {}
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -113,8 +98,6 @@ def _next_ffa_local() -> dt.datetime:
         if c > now_local:
             return c
     return candidates[0] + dt.timedelta(days=1)
-
-# (Music feature removed)
 
 # --- PERMISSION HELPERS ---
 def has_creator_role():
@@ -216,49 +199,54 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
-                        # Sunday: 22:30 (10:30pm), other days: 2:30 (2:30am)
-                        # Removed Sunday 20:30 (8:30pm) announcement
                         candidates = []
-                        # Find next Sunday at 22:30
+                        
+                        # Find next Monday-Saturday at 8:00pm
                         for days_offset in range(8):
                             check_date = now_local + dt.timedelta(days=days_offset)
-                            if check_date.weekday() == 6:  # Sunday
-                                t = check_date.replace(hour=22, minute=30, second=0, microsecond=0)
+                            weekday = check_date.weekday()  # 0=Monday, 6=Sunday
+                            if weekday < 6:  # Monday-Saturday
+                                t = check_date.replace(hour=20, minute=0, second=0, microsecond=0)
                                 if t > now_local:
                                     candidates.append(t)
                                     break
-                        # Find next 2:30am (any day except Sunday, or if Sunday already passed)
+                        
+                        # Find next Sunday at 10:00pm
                         for days_offset in range(8):
                             check_date = now_local + dt.timedelta(days=days_offset)
-                            t = check_date.replace(hour=2, minute=30, second=0, microsecond=0)
-                            if t > now_local and (check_date.weekday() != 6 or days_offset > 0):
-                                candidates.append(t)
-                                break
+                            if check_date.weekday() == 6:  # Sunday
+                                t = check_date.replace(hour=22, minute=0, second=0, microsecond=0)
+                                if t > now_local:
+                                    candidates.append(t)
+                                    break
+                        
                         if not candidates:
-                            # Fallback: next 2:30am
-                            t = now_local.replace(hour=2, minute=30, second=0, microsecond=0)
-                            if t <= now_local:
-                                t = t + dt.timedelta(days=1)
-                            candidates.append(t)
-                        next_time = min(candidates)
+                            # Fallback: next Monday at 8pm
+                            days_to_monday = (7 - now_local.weekday()) % 7
+                            if days_to_monday == 0:
+                                days_to_monday = 7
+                            next_time = (now_local + dt.timedelta(days=days_to_monday)).replace(hour=20, minute=0, second=0, microsecond=0)
+                        else:
+                            next_time = min(candidates)
+                        
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
+                        
                         channel = bot.get_channel(SIEGE_CHANNEL_ID)
                         if channel is None:
                             try:
                                 channel = await bot.fetch_channel(SIEGE_CHANNEL_ID)
                             except Exception:
                                 channel = None
+                        
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
                                 try:
-                                    # Sunday 10:30pm: schedule 11pm announcement
-                                    # 2:30am: schedule 3am announcement (30 minutes later)
-                                    if next_time.weekday() == 6 and next_time.hour == 22:  # Sunday 10:30pm
-                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800  # 11pm
-                                    else:
-                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800  # 30 minutes later
+                                    # Schedule participant announcement
+                                    # Sunday 10pm: announce at 11pm (1 hour later)
+                                    # Mon-Sat 8pm: announce at 9pm (1 hour later)
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
                                     await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
                                 except Exception:
                                     pass
@@ -277,27 +265,54 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
-                        target_weekday = 6  # Sunday
-                        candidate = now_local.replace(hour=20, minute=0, second=0, microsecond=0)  # 8pm
-                        days_ahead = (target_weekday - now_local.weekday()) % 7
-                        if days_ahead == 0 and candidate <= now_local:
-                            days_ahead = 7
-                        next_time = candidate + dt.timedelta(days=days_ahead)
+                        candidates = []
+                        
+                        # Find next Sunday at 8:00pm
+                        for days_offset in range(8):
+                            check_date = now_local + dt.timedelta(days=days_offset)
+                            if check_date.weekday() == 6:  # Sunday
+                                t = check_date.replace(hour=20, minute=0, second=0, microsecond=0)
+                                if t > now_local:
+                                    candidates.append(t)
+                                    break
+                        
+                        # Find next Wednesday at 11:00pm
+                        for days_offset in range(8):
+                            check_date = now_local + dt.timedelta(days=days_offset)
+                            if check_date.weekday() == 2:  # Wednesday
+                                t = check_date.replace(hour=23, minute=0, second=0, microsecond=0)
+                                if t > now_local:
+                                    candidates.append(t)
+                                    break
+                        
+                        if not candidates:
+                            # Fallback: next Sunday at 8pm
+                            days_to_sunday = (6 - now_local.weekday()) % 7
+                            if days_to_sunday == 0:
+                                days_to_sunday = 7
+                            next_time = (now_local + dt.timedelta(days=days_to_sunday)).replace(hour=20, minute=0, second=0, microsecond=0)
+                        else:
+                            next_time = min(candidates)
+                        
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
+                        
                         channel = bot.get_channel(SECRET_ROOM_CHANNEL_ID)
                         if channel is None:
                             try:
                                 channel = await bot.fetch_channel(SECRET_ROOM_CHANNEL_ID)
                             except Exception:
                                 channel = None
+                        
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=True)
                                 try:
-                                    # Schedule 9pm mention for players who voted check
-                                    when_unix_9pm = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later = 9pm
-                                    await _schedule_announcement(msg.id, channel, when_unix_9pm, "Secret Room")
+                                    # Schedule participant announcement
+                                    # Sunday 8pm: announce at 9pm (1 hour later)
+                                    # Wednesday 11pm: announce at 12am Thursday (1 hour later, next day)
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
+                                    await _schedule_announcement(msg.id, channel, when_unix, "Secret Room")
                                 except Exception:
                                     pass
                             except Exception:
@@ -357,9 +372,6 @@ async def post_message(ctx, *, message: str = None):
             pass
     except Exception as e:
         await ctx.send(f"❌ Failed to post message: {str(e)}")
-
-# (Music commands removed)
-
 
 # --- LINEUP SYSTEM ---
 # Track active line-ups by message ID
@@ -562,43 +574,6 @@ async def reloadcmds_cmd(ctx: commands.Context):
             await err.delete()
         except Exception:
             pass
-
-@bot.command(name="siege845")
-@has_creator_role()
-@commands.guild_only()
-async def siege845_cmd(ctx: commands.Context):
-    """Manually create siege lineup for 8:45pm today with announcement"""
-    try:
-        # Get siege channel
-        channel = bot.get_channel(SIEGE_CHANNEL_ID)
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(SIEGE_CHANNEL_ID)
-            except Exception:
-                channel = None
-        
-        if not channel or not hasattr(channel, "guild") or not channel.guild:
-            await ctx.send("❌ Could not access siege channel.")
-            return
-        
-        # Calculate 8:45pm today in PH timezone
-        now_local = dt.datetime.now(PH_TZ)
-        target_time = now_local.replace(hour=20, minute=45, second=0, microsecond=0)
-        # If 8:45pm already passed today, use tomorrow
-        if target_time <= now_local:
-            target_time = target_time + dt.timedelta(days=1)
-        
-        # Create lineup message with @everyone ping
-        msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
-        
-        # Schedule announcement for 8:45pm
-        when_unix = int(target_time.astimezone(dt.timezone.utc).timestamp())
-        await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
-        
-        unix_display = int(target_time.astimezone(dt.timezone.utc).timestamp())
-        await ctx.send(f"✅ Siege lineup posted! Announcement scheduled for <t:{unix_display}:F> (<t:{unix_display}:R>)")
-    except Exception as e:
-        await ctx.send(f"❌ Failed to create siege lineup: {str(e)}")
 
 # --- CREATOR PANEL (buttons) ---
 class LineupPanel(nextcord.ui.View):
@@ -892,466 +867,6 @@ try:
                 await interaction.response.send_message("Failed to list commands.", ephemeral=True)
             except Exception:
                 pass
-
-    def _get_queue(gid: int) -> list[dict]:
-        if gid not in MUSIC_QUEUES:
-            MUSIC_QUEUES[gid] = []
-        return MUSIC_QUEUES[gid]
-
-    async def _reply_interaction(interaction: nextcord.Interaction, text: str):
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(text, ephemeral=True)
-            else:
-                await interaction.followup.send(text, ephemeral=True)
-        except Exception:
-            pass
-
-    async def _ensure_voice(interaction: nextcord.Interaction) -> nextcord.VoiceClient | None:
-        try:
-            if not VOICE_OK:
-                await _reply_interaction(interaction, "❌ Voice not supported. Install PyNaCl.")
-                return None
-            member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-            if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
-                await _reply_interaction(interaction, "❌ You are not in a voice channel.")
-                return None
-            # Permission check before attempting connection
-            bot_member = interaction.guild.me if interaction.guild else None
-            ch = member.voice.channel
-            try:
-                if isinstance(ch, nextcord.StageChannel):
-                    await _reply_interaction(interaction, "❌ Stage channels are not supported for music. Please use a normal voice channel.")
-                    return None
-            except Exception:
-                pass
-            try:
-                perms = ch.permissions_for(bot_member) if bot_member else None
-                if not perms or not perms.connect or not perms.speak:
-                    await _reply_interaction(interaction, "❌ I need 'Connect' and 'Speak' permissions in your voice channel.")
-                    return None
-            except Exception:
-                pass
-            vc = interaction.guild.voice_client
-            if vc and vc.channel.id == member.voice.channel.id:
-                return vc
-            if vc and vc.is_connected():
-                try:
-                    try:
-                        await vc.move_to(member.voice.channel)
-                    except RuntimeError:
-                        fut = asyncio.run_coroutine_threadsafe(vc.move_to(member.voice.channel), bot.loop)
-                        fut.result(timeout=10)
-                    return vc
-                except Exception:
-                    await _reply_interaction(interaction, "❌ Failed to move to your voice channel.")
-                    return None
-            try:
-                try:
-                    vc = await member.voice.channel.connect()
-                except RuntimeError:
-                    fut = asyncio.run_coroutine_threadsafe(member.voice.channel.connect(), bot.loop)
-                    vc = fut.result(timeout=10)
-                return vc
-            except Exception as e:
-                err_text = f"❌ Failed to join voice channel: {type(e).__name__}: {e}"
-                try:
-                    err_text += "\n• Check bot 'Connect' and 'Speak' permissions\n• Ensure channel isn't full\n• Avoid Stage channels"
-                except Exception:
-                    pass
-                await _reply_interaction(interaction, err_text)
-                return None
-        except Exception:
-            return None
-
-    def _normalize_yt_url(u: str) -> str:
-        try:
-            s = (u or "").strip()
-            if "youtube.com/shorts/" in s:
-                m = re.search(r"shorts/([A-Za-z0-9_-]{6,})", s)
-                if m:
-                    return f"https://www.youtube.com/watch?v={m.group(1)}"
-            if "youtu.be/" in s:
-                m = re.search(r"youtu\.be/([A-Za-z0-9_-]{6,})", s)
-                if m:
-                    return f"https://www.youtube.com/watch?v={m.group(1)}"
-            return s
-        except Exception:
-            return u
-
-    def _yt_info_sync(url: str) -> dict | None:
-        """Synchronous version of yt_info - runs in executor"""
-        try:
-            if yt_dlp is None:
-                return None
-            u = _normalize_yt_url(url)
-            # Optional cookie support via env (base64 of Netscape cookie file)
-            cookiefile = None
-            try:
-                import base64, tempfile
-                b64 = os.getenv("YT_DLP_COOKIES_B64")
-                if b64:
-                    raw = base64.b64decode(b64)
-                    f = tempfile.NamedTemporaryFile(delete=False)
-                    f.write(raw)
-                    f.flush()
-                    f.close()
-                    cookiefile = f.name
-            except Exception:
-                pass
-
-            common = {
-                "format": "bestaudio/best",
-                "noplaylist": True,
-                "quiet": True,
-                "default_search": "ytsearch",
-                "nocheckcertificate": True,
-                "geo_bypass": True,
-                "extractor_retries": 3,
-                "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"},
-            }
-            if cookiefile:
-                common["cookiefile"] = cookiefile
-
-            attempts = [
-                {"extractor_args": {"youtube": {"player_client": ["default"]}}},
-                {"extractor_args": {"youtube": {"player_client": ["ios"]}}},
-                {"extractor_args": {"youtube": {"player_client": ["android"]}}},
-                {"extractor_args": {"youtube": {"player_client": ["web"]}}},
-            ]
-            for a in attempts:
-                opts = dict(common)
-                opts.update(a)
-                try:
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        info = ydl.extract_info(u, download=False)
-                        if info and "entries" in info:
-                            info = info["entries"][0]
-                        if info:
-                            if cookiefile and os.path.exists(cookiefile):
-                                try:
-                                    os.remove(cookiefile)
-                                except Exception:
-                                    pass
-                            return info
-                except Exception:
-                    continue
-            # Final fallback: treat input as search query
-            try:
-                fallback = dict(common)
-                with yt_dlp.YoutubeDL(fallback) as ydl:
-                    info = ydl.extract_info(u, download=False)
-                    if info and "entries" in info:
-                        info = info["entries"][0]
-                    if cookiefile and os.path.exists(cookiefile):
-                        try:
-                            os.remove(cookiefile)
-                        except Exception:
-                            pass
-                    return info
-            except Exception:
-                if cookiefile and os.path.exists(cookiefile):
-                    try:
-                        os.remove(cookiefile)
-                    except Exception:
-                        pass
-                return None
-        except Exception as e:
-            if cookiefile and os.path.exists(cookiefile):
-                try:
-                    os.remove(cookiefile)
-                except Exception:
-                    pass
-            return None
-
-    async def _yt_info(url: str) -> dict | None:
-        """Async wrapper that runs yt-dlp in executor to avoid blocking"""
-        try:
-            loop = asyncio.get_event_loop()
-            # Run the blocking operation in a thread pool with timeout
-            info = await asyncio.wait_for(
-                loop.run_in_executor(None, _yt_info_sync, url),
-                timeout=30.0  # 30 second timeout
-            )
-            return info
-        except asyncio.TimeoutError:
-            print("[MUSIC] yt-dlp extraction timed out", flush=True)
-            return None
-        except Exception as e:
-            print(f"[MUSIC] Error in _yt_info: {e}", flush=True)
-            return None
-
-    async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
-        try:
-            queue = _get_queue(guild_id)
-            if not queue:
-                vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
-                if vc:
-                    try:
-                        await vc.disconnect(force=True)
-                    except Exception:
-                        pass
-                try:
-                    await channel.send("🛑 Queue empty. Disconnected.")
-                except Exception:
-                    pass
-                return
-            item = queue[0]
-            url = item.get("url") or item.get("source_url")
-            if not url:
-                try:
-                    await channel.send("❌ No audio URL found for this item. Skipping...")
-                    queue.pop(0)
-                    await _play_next(guild_id, channel)
-                except Exception:
-                    pass
-                return
-            vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
-            if not vc or not vc.is_connected():
-                try:
-                    await channel.send("❌ Voice client not connected. Cannot play audio.")
-                except Exception:
-                    pass
-                return
-            try:
-                audio = nextcord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
-            except Exception as e:
-                try:
-                    await channel.send(f"❌ Failed to create audio source: {str(e)}")
-                    queue.pop(0)
-                    await _play_next(guild_id, channel)
-                except Exception:
-                    pass
-                return
-            def _after(err):
-                try:
-                    if err:
-                        print(f"[MUSIC] Playback error: {err}", flush=True)
-                    queue.pop(0)
-                    # Schedule the next play - _after runs in a thread, so we need run_coroutine_threadsafe
-                    # Get the event loop from the bot
-                    try:
-                        loop = bot.loop
-                        if loop and loop.is_running():
-                            fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), loop)
-                            # Don't wait for result in the callback thread, let it run
-                            fut.result(timeout=60)  # Increased timeout
-                        else:
-                            # If no loop, try to get it from asyncio
-                            try:
-                                loop = asyncio.get_event_loop()
-                                if loop.is_running():
-                                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), loop)
-                                    fut.result(timeout=60)
-                                else:
-                                    loop.run_until_complete(_play_next(guild_id, channel))
-                            except Exception:
-                                print("[MUSIC] Could not get event loop for _after callback", flush=True)
-                    except Exception as e:
-                        print(f"[MUSIC] Error scheduling next play in _after callback: {e}", flush=True)
-                except Exception as e:
-                    print(f"[MUSIC] Error in _after callback: {e}", flush=True)
-            try:
-                if vc.is_playing():
-                    vc.stop()
-            except Exception:
-                pass
-            try:
-                vc.play(audio, after=_after)
-                MUSIC_NOW[guild_id] = item
-                await channel.send(f"🎵 Now playing: {item.get('title') or 'Unknown'}")
-            except Exception as e:
-                try:
-                    await channel.send(f"❌ Failed to start playback: {str(e)}")
-                    queue.pop(0)
-                    await _play_next(guild_id, channel)
-                except Exception:
-                    pass
-        except Exception as e:
-            try:
-                import traceback
-                print(f"[MUSIC] Error in _play_next: {e}", flush=True)
-                traceback.print_exc()
-            except Exception:
-                pass
-
-    @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
-    async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
-        # Defer response IMMEDIATELY - must be first thing, within 3 seconds
-        deferred = False
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-                deferred = True
-        except Exception as e:
-            # If defer fails, try to send error message directly
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message("❌ Failed to process command. Please try again.", ephemeral=True)
-            except Exception:
-                pass
-            print(f"[MUSIC] Error deferring response: {e}", flush=True)
-            return
-        
-        # If we didn't defer, we can't use followup
-        if not deferred:
-            return
-        
-        try:
-            # Check dependencies
-            if yt_dlp is None:
-                await interaction.followup.send("❌ yt-dlp is not installed. Please install it with: `pip install yt-dlp`", ephemeral=True)
-                return
-            
-            if not VOICE_OK:
-                await interaction.followup.send("❌ Voice not supported. Please install PyNaCl: `pip install PyNaCl`", ephemeral=True)
-                return
-            
-            # Check voice channel - but use followup for errors since we deferred
-            member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-            if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
-                await interaction.followup.send("❌ You are not in a voice channel.", ephemeral=True)
-                return
-            
-            # Check permissions
-            bot_member = interaction.guild.me if interaction.guild else None
-            ch = member.voice.channel
-            if isinstance(ch, nextcord.StageChannel):
-                await interaction.followup.send("❌ Stage channels are not supported for music. Please use a normal voice channel.", ephemeral=True)
-                return
-            
-            perms = ch.permissions_for(bot_member) if bot_member else None
-            if not perms or not perms.connect or not perms.speak:
-                await interaction.followup.send("❌ I need 'Connect' and 'Speak' permissions in your voice channel.", ephemeral=True)
-                return
-            
-            # Connect to voice channel
-            target_channel = member.voice.channel
-            vc = interaction.guild.voice_client
-            
-            # Check if already connected to the same channel
-            already_connected = False
-            if vc:
-                try:
-                    # Check if connected and in the same channel
-                    if vc.is_connected() and vc.channel:
-                        if vc.channel.id == target_channel.id:
-                            already_connected = True
-                        else:
-                            # Connected to different channel, move to target
-                            try:
-                                await vc.move_to(target_channel)
-                                already_connected = True
-                            except Exception as move_err:
-                                print(f"[MUSIC] Error moving channel: {move_err}", flush=True)
-                                # If move fails, we'll reconnect below
-                                already_connected = False
-                except Exception:
-                    # If check fails, assume not connected
-                    already_connected = False
-            
-            # Connect if not already connected
-            if not already_connected:
-                try:
-                    # Disconnect first if connected to different channel
-                    if vc and vc.is_connected():
-                        try:
-                            await vc.disconnect(force=True)
-                            await asyncio.sleep(0.2)
-                        except Exception:
-                            pass
-                    
-                    # Connect to target channel
-                    vc = await target_channel.connect()
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    # If error says "already connected", check if it's to the right channel
-                    if "already connected" in error_msg:
-                        # Re-check connection status
-                        vc = interaction.guild.voice_client
-                        if vc and vc.is_connected() and vc.channel:
-                            if vc.channel.id == target_channel.id:
-                                # Actually connected to right channel, continue
-                                pass
-                            else:
-                                await interaction.followup.send(f"❌ Bot is connected to a different voice channel. Please disconnect it first or move to the same channel.", ephemeral=True)
-                                return
-                        else:
-                            # Strange state, try to continue
-                            pass
-                    else:
-                        await interaction.followup.send(f"❌ Failed to join voice channel. Error: {str(e)[:200]}", ephemeral=True)
-                        return
-            
-            await interaction.followup.send("🔍 Fetching video info... This may take a moment.", ephemeral=True)
-            
-            # Use async version that won't block
-            info = await _yt_info(youtube_link)
-            if not info:
-                await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
-                return
-            
-            url = info.get("url")
-            if not url:
-                await interaction.followup.send("❌ Failed to extract audio URL from video.", ephemeral=True)
-                return
-            
-            title = info.get("title", "Unknown")
-            q = _get_queue(interaction.guild.id)
-            q.append({"title": title, "url": url, "webpage_url": info.get("webpage_url"), "source_url": url})
-            
-            if vc.is_playing():
-                await interaction.followup.send(f"➕ Added to queue: {title}", ephemeral=True)
-            else:
-                await interaction.followup.send(f"🎵 Starting: {title}", ephemeral=True)
-                await _play_next(interaction.guild.id, interaction.channel)
-        except Exception as e:
-            try:
-                error_msg = f"❌ Error: {str(e)}"
-                if len(error_msg) > 2000:
-                    error_msg = "❌ An error occurred while processing your request."
-                await interaction.followup.send(error_msg, ephemeral=True)
-            except Exception:
-                pass
-            import traceback
-            print(f"[MUSIC] Error in strplay: {e}", flush=True)
-            traceback.print_exc()
-
-    @bot.slash_command(name="strskip", description="Skip current song", guild_ids=[GUILD_ID])
-    async def strskip(interaction: nextcord.Interaction):
-        vc = interaction.guild.voice_client if interaction.guild else None
-        if not vc or not vc.is_connected():
-            await interaction.response.send_message("❌ Bot is not in a voice channel.", ephemeral=True)
-            return
-        q = _get_queue(interaction.guild.id)
-        if not q:
-            await interaction.response.send_message("❌ Queue is empty.", ephemeral=True)
-            try:
-                await vc.disconnect(force=True)
-            except Exception:
-                pass
-            return
-        try:
-            vc.stop()
-        except Exception:
-            pass
-        await interaction.response.send_message("⏭️ Skipped to next song.", ephemeral=True)
-
-    @bot.slash_command(name="strstop", description="Stop and clear queue", guild_ids=[GUILD_ID])
-    async def strstop(interaction: nextcord.Interaction):
-        vc = interaction.guild.voice_client if interaction.guild else None
-        q = _get_queue(interaction.guild.id)
-        q.clear()
-        if vc:
-            try:
-                vc.stop()
-            except Exception:
-                pass
-            try:
-                await vc.disconnect(force=True)
-            except Exception:
-                pass
-        await interaction.response.send_message("🛑 Stopped playback and cleared queue.", ephemeral=True)
 
 except Exception:
     # If slash support isn't available, prefix commands still work.
