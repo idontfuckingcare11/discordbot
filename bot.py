@@ -88,7 +88,6 @@ SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [0, 11, 14, 17, 20]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
-WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -541,27 +540,6 @@ async def nextffa_cmd(ctx: commands.Context):
         msg = f"Next FFA: <t:{unix}:F> (<t:{unix}:R>) Asia/Manila"
         allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
         await ctx.send(msg, allowed_mentions=allowed)
-    except Exception:
-        pass
-
-@bot.command(name="worldboss")
-@has_creator_role()
-@commands.guild_only()
-async def worldboss_cmd(ctx: commands.Context):
-    try:
-        now = dt.datetime.now(dt.timezone.utc)
-        end = now + dt.timedelta(hours=2)
-        unix_end = int(end.timestamp())
-        mins = int(((end - now).total_seconds() + 59) // 60)
-        await ctx.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)")
-        async def _task():
-            try:
-                await asyncio.sleep(2*60*60)
-                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                await ctx.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-            except Exception:
-                pass
-        asyncio.create_task(_task())
     except Exception:
         pass
 
