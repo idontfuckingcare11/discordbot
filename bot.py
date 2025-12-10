@@ -70,6 +70,7 @@ GUILD_ID = int(os.getenv("GUILD_ID", "1156881904394567751"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"))
 SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
 SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
+RAID_ANNOUNCE_CHANNEL_ID = int(os.getenv("RAID_ANNOUNCE_CHANNEL_ID", "1448398031107002519"))
 
 # (Removed siege/secret room schedules)
 
@@ -85,6 +86,7 @@ START_TIME: dt.datetime | None = None
 ANNOUNCE_TASK: asyncio.Task | None = None
 SIEGE_LINEUP_TASK: asyncio.Task | None = None
 SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
+RAID_ANNOUNCE_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [0, 11, 14, 17, 20]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
@@ -200,8 +202,8 @@ async def on_ready():
                         now_local = dt.datetime.now(PH_TZ)
                         candidates = []
                         
-                        # Find next 2:30am (every day)
-                        t = now_local.replace(hour=2, minute=30, second=0, microsecond=0)
+                        # Find next 2:00am (every day)
+                        t = now_local.replace(hour=2, minute=0, second=0, microsecond=0)
                         if t <= now_local:
                             t = t + dt.timedelta(days=1)
                         candidates.append(t)
@@ -226,8 +228,8 @@ async def on_ready():
                                     break
                         
                         if not candidates:
-                            # Fallback: next 2:30am
-                            t = now_local.replace(hour=2, minute=30, second=0, microsecond=0)
+                            # Fallback: next 2:00am
+                            t = now_local.replace(hour=2, minute=0, second=0, microsecond=0)
                             if t <= now_local:
                                 t = t + dt.timedelta(days=1)
                             next_time = t
@@ -249,13 +251,10 @@ async def on_ready():
                                 msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
                                 try:
                                     # Schedule participant announcement
-                                    # 2:30am: announce at 3:00am (30 minutes later)
+                                    # 2:00am: announce at 3:00am (1 hour later)
                                     # Sunday 10pm: announce at 11pm (1 hour later)
                                     # Mon-Sat 8pm: announce at 9pm (1 hour later)
-                                    if next_time.hour == 2 and next_time.minute == 30:
-                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800  # 30 minutes later
-                                    else:
-                                        when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
                                     await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
                                 except Exception:
                                     pass
@@ -329,6 +328,51 @@ async def on_ready():
                     except Exception:
                         await asyncio.sleep(5)
             SECRET_ROOM_LINEUP_TASK = asyncio.create_task(_secret_room_loop())
+    except Exception:
+        pass
+
+    try:
+        global RAID_ANNOUNCE_TASK
+        if not RAID_ANNOUNCE_TASK or RAID_ANNOUNCE_TASK.done():
+            async def _raid_announce_loop():
+                while True:
+                    try:
+                        now_local = dt.datetime.now(PH_TZ)
+                        candidates = []
+                        
+                        # Raid announcement times: 4:55am, 8:55am, 9:55pm (21:55)
+                        raid_times = [
+                            (4, 55),   # 4:55am
+                            (8, 55),   # 8:55am
+                            (21, 55),  # 9:55pm
+                        ]
+                        
+                        for hour, minute in raid_times:
+                            t = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                            if t <= now_local:
+                                t = t + dt.timedelta(days=1)
+                            candidates.append(t)
+                        
+                        next_time = min(candidates)
+                        delay = max(1, int((next_time - now_local).total_seconds()))
+                        await asyncio.sleep(delay)
+                        
+                        channel = bot.get_channel(RAID_ANNOUNCE_CHANNEL_ID)
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(RAID_ANNOUNCE_CHANNEL_ID)
+                            except Exception:
+                                channel = None
+                        
+                        if channel:
+                            try:
+                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                                await channel.send("⚠️ Prepare your gear! Raid is coming in 5mins (real time)", allowed_mentions=allowed)
+                            except Exception:
+                                pass
+                    except Exception:
+                        await asyncio.sleep(5)
+            RAID_ANNOUNCE_TASK = asyncio.create_task(_raid_announce_loop())
     except Exception:
         pass
 
