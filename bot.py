@@ -335,6 +335,7 @@ async def on_ready():
         global RAID_ANNOUNCE_TASK
         if not RAID_ANNOUNCE_TASK or RAID_ANNOUNCE_TASK.done():
             async def _raid_announce_loop():
+                last_announce = {}  # Track last announcement time to prevent duplicates
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
@@ -357,6 +358,15 @@ async def on_ready():
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
                         
+                        # Prevent duplicate announcements
+                        announce_key = f"{next_time.date()}_{next_time.hour}_{next_time.minute}"
+                        if announce_key in last_announce:
+                            continue
+                        last_announce[announce_key] = next_time
+                        # Clean old entries (keep only last 24 hours)
+                        cutoff = now_local - dt.timedelta(hours=24)
+                        last_announce = {k: v for k, v in last_announce.items() if v > cutoff}
+                        
                         channel = bot.get_channel(RAID_ANNOUNCE_CHANNEL_ID)
                         if channel is None:
                             try:
@@ -367,7 +377,38 @@ async def on_ready():
                         if channel:
                             try:
                                 allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                                await channel.send("⚠️ Prepare your gear! Raid is coming in 5mins (real time)", allowed_mentions=allowed)
+                                # Calculate raid start time (5 minutes after announcement)
+                                raid_start = next_time + dt.timedelta(minutes=5)
+                                raid_start_unix = int(raid_start.astimezone(dt.timezone.utc).timestamp())
+                                
+                                # Real-time countdown that updates every second
+                                async def _realtime_countdown():
+                                    try:
+                                        # Send initial message
+                                        msg = await channel.send("⚠️ Prepare your gear! Raid is coming in **5:00**", allowed_mentions=allowed)
+                                        
+                                        # Update countdown every second for 5 minutes (300 seconds)
+                                        for remaining_seconds in range(299, -1, -1):  # Count from 299 to 0
+                                            minutes = remaining_seconds // 60
+                                            seconds = remaining_seconds % 60
+                                            countdown_text = f"{minutes}:{seconds:02d}"
+                                            
+                                            try:
+                                                if remaining_seconds > 0:
+                                                    await msg.edit(content=f"⚠️ Prepare your gear! Raid is coming in **{countdown_text}**")
+                                                else:
+                                                    await msg.edit(content=f"🔥 **Raid is starting NOW!** <t:{raid_start_unix}:F>")
+                                                    break
+                                            except Exception:
+                                                # If message was deleted or can't edit, stop countdown
+                                                break
+                                            
+                                            await asyncio.sleep(1)  # Wait 1 second before next update
+                                    except Exception:
+                                        pass
+                                
+                                # Run countdown in background task
+                                asyncio.create_task(_realtime_countdown())
                             except Exception:
                                 pass
                     except Exception:
@@ -586,6 +627,63 @@ async def nextffa_cmd(ctx: commands.Context):
         await ctx.send(msg, allowed_mentions=allowed)
     except Exception:
         pass
+
+@bot.command(name="testraid")
+@has_creator_role()
+@commands.guild_only()
+async def testraid_cmd(ctx: commands.Context):
+    """Test the raid countdown - triggers a 5-minute countdown immediately"""
+    try:
+        # Use the raid channel or current channel
+        channel = bot.get_channel(RAID_ANNOUNCE_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(RAID_ANNOUNCE_CHANNEL_ID)
+            except Exception:
+                channel = ctx.channel  # Fallback to current channel
+        
+        if not channel:
+            await ctx.send("❌ Could not access raid channel.")
+            return
+        
+        allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+        
+        # Calculate raid start time (5 minutes from now)
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        raid_start = now_utc + dt.timedelta(minutes=5)
+        raid_start_unix = int(raid_start.timestamp())
+        
+        # Real-time countdown that updates every second
+        async def _realtime_countdown():
+            try:
+                # Send initial message
+                msg = await channel.send("⚠️ Prepare your gear! Raid is coming in **5:00**", allowed_mentions=allowed)
+                
+                # Update countdown every second for 5 minutes (300 seconds)
+                for remaining_seconds in range(299, -1, -1):  # Count from 299 to 0
+                    minutes = remaining_seconds // 60
+                    seconds = remaining_seconds % 60
+                    countdown_text = f"{minutes}:{seconds:02d}"
+                    
+                    try:
+                        if remaining_seconds > 0:
+                            await msg.edit(content=f"⚠️ Prepare your gear! Raid is coming in **{countdown_text}**")
+                        else:
+                            await msg.edit(content=f"🔥 **Raid is starting NOW!** <t:{raid_start_unix}:F>")
+                            break
+                    except Exception:
+                        # If message was deleted or can't edit, stop countdown
+                        break
+                    
+                    await asyncio.sleep(1)  # Wait 1 second before next update
+            except Exception:
+                pass
+        
+        # Run countdown in background task
+        asyncio.create_task(_realtime_countdown())
+        await ctx.send(f"✅ Test raid countdown started in {channel.mention}!")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to start test raid: {str(e)}")
 
 @bot.command(name="reloadcmds")
 @has_creator_role()
