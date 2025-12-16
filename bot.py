@@ -512,23 +512,48 @@ async def on_reaction_add(reaction: nextcord.Reaction, user: nextcord.User):
     try:
         if user.bot or reaction.message.id not in lineups:
             return
+        
         guild = reaction.message.guild
         if not guild:
             return
         member = guild.get_member(user.id)
         if not member:
             return
+        
         state = lineups[reaction.message.id]
-        if str(reaction.emoji) == "✅":
+        emoji_str = str(reaction.emoji).strip()
+        
+        # More robust emoji comparison - handle different emoji representations
+        # Check mark emoji: ✅ (U+2705) or white_check_mark
+        # X emoji: ❌ (U+274C) or x
+        is_check = (
+            emoji_str == "✅" or 
+            emoji_str == "\u2705" or
+            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('white_check_mark', '✅'))
+        )
+        is_x = (
+            emoji_str == "❌" or 
+            emoji_str == "\u274C" or
+            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('x', '❌', 'negative_squared_cross_mark'))
+        )
+        
+        if is_check:
             state["no"].discard(user.id)
             state["join"].add(user.id)
-        elif str(reaction.emoji) == "❌":
+        elif is_x:
             state["join"].discard(user.id)
             state["no"].add(user.id)
         else:
             return
+        
+        # Get title from embed safely
+        title = "Line-Up"
+        if reaction.message.embeds and len(reaction.message.embeds) > 0:
+            embed_title = reaction.message.embeds[0].title or ""
+            title = embed_title.replace("⚔ ", "").replace(" ⚔", "").strip() or "Line-Up"
+        
         embed = _format_lineup_embed(
-            reaction.message.embeds[0].title.replace("⚔ ", "").replace(" ⚔", "") if reaction.message.embeds else "Line-Up",
+            title,
             guild,
             state["join"],
             state["no"],
@@ -551,14 +576,37 @@ async def on_reaction_remove(reaction: nextcord.Reaction, user: nextcord.User):
         if not guild:
             return
         state = lineups[reaction.message.id]
-        if str(reaction.emoji) == "✅":
+        emoji_str = str(reaction.emoji).strip()
+        
+        # More robust emoji comparison - handle different emoji representations
+        # Check mark emoji: ✅ (U+2705) or white_check_mark
+        # X emoji: ❌ (U+274C) or x
+        is_check = (
+            emoji_str == "✅" or 
+            emoji_str == "\u2705" or
+            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('white_check_mark', '✅'))
+        )
+        is_x = (
+            emoji_str == "❌" or 
+            emoji_str == "\u274C" or
+            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('x', '❌', 'negative_squared_cross_mark'))
+        )
+        
+        if is_check:
             state["join"].discard(user.id)
-        elif str(reaction.emoji) == "❌":
+        elif is_x:
             state["no"].discard(user.id)
         else:
             return
+        
+        # Get title from embed safely
+        title = "Line-Up"
+        if reaction.message.embeds and len(reaction.message.embeds) > 0:
+            embed_title = reaction.message.embeds[0].title or ""
+            title = embed_title.replace("⚔ ", "").replace(" ⚔", "").strip() or "Line-Up"
+        
         embed = _format_lineup_embed(
-            reaction.message.embeds[0].title.replace("⚔ ", "").replace(" ⚔", "") if reaction.message.embeds else "Line-Up",
+            title,
             guild,
             state["join"],
             state["no"],
@@ -997,6 +1045,50 @@ try:
                 await interaction.response.send_message("Failed to list commands.", ephemeral=True)
             except Exception:
                 pass
+
+    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup", guild_ids=[GUILD_ID])
+    async def siegelineup_slash(
+        interaction: nextcord.Interaction,
+        text: str = SlashOption(required=False, description="Extra text or rules"),
+        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
+        ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
+        if ts:
+            await _schedule_announcement(msg.id, interaction.channel, ts, "Guild Siege")
+        try:
+            await interaction.delete_original_message()
+        except Exception:
+            pass
+
+    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup", guild_ids=[GUILD_ID])
+    async def secretroomlineup_slash(
+        interaction: nextcord.Interaction,
+        text: str = SlashOption(required=False, description="Extra text or rules"),
+        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
+        ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
+        if ts:
+            await _schedule_announcement(msg.id, interaction.channel, ts, "Secret Room")
+        try:
+            await interaction.delete_original_message()
+        except Exception:
+            pass
 
 except Exception:
     # If slash support isn't available, prefix commands still work.
