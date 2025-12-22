@@ -71,6 +71,7 @@ ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"
 SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
 SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
 RAID_ANNOUNCE_CHANNEL_ID = int(os.getenv("RAID_ANNOUNCE_CHANNEL_ID", "1448398031107002519"))
+WORLD_BOSS_ANNOUNCE_CHANNEL_ID = int(os.getenv("WORLD_BOSS_ANNOUNCE_CHANNEL_ID", "1447677206355513526"))
 
 # (Removed siege/secret room schedules)
 
@@ -87,9 +88,12 @@ ANNOUNCE_TASK: asyncio.Task | None = None
 SIEGE_LINEUP_TASK: asyncio.Task | None = None
 SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
 RAID_ANNOUNCE_TASK: asyncio.Task | None = None
+WORLD_BOSS_ANNOUNCE_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [0, 11, 14, 17, 20]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
+WORLD_BOSS_TIMES = [(13, 0), (19, 0)]
+WORLD_BOSS_ANNOUNCE_MESSAGE = "World Boss has started! Prepare your gear."
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -414,6 +418,47 @@ async def on_ready():
                     except Exception:
                         await asyncio.sleep(5)
             RAID_ANNOUNCE_TASK = asyncio.create_task(_raid_announce_loop())
+    except Exception:
+        pass
+
+    try:
+        global WORLD_BOSS_ANNOUNCE_TASK
+        if not WORLD_BOSS_ANNOUNCE_TASK or WORLD_BOSS_ANNOUNCE_TASK.done():
+            async def _world_boss_loop():
+                last_announce = {}
+                while True:
+                    try:
+                        now_local = dt.datetime.now(PH_TZ)
+                        candidates = []
+                        for hour, minute in WORLD_BOSS_TIMES:
+                            t = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                            if t <= now_local:
+                                t = t + dt.timedelta(days=1)
+                            candidates.append(t)
+                        next_time = min(candidates)
+                        delay = max(1, int((next_time - now_local).total_seconds()))
+                        await asyncio.sleep(delay)
+                        key = f"{next_time.date()}_{next_time.hour}_{next_time.minute}"
+                        if key in last_announce:
+                            continue
+                        last_announce[key] = next_time
+                        cutoff = now_local - dt.timedelta(hours=24)
+                        last_announce = {k: v for k, v in last_announce.items() if v > cutoff}
+                        channel = bot.get_channel(WORLD_BOSS_ANNOUNCE_CHANNEL_ID)
+                        if channel is None:
+                            try:
+                                channel = await bot.fetch_channel(WORLD_BOSS_ANNOUNCE_CHANNEL_ID)
+                            except Exception:
+                                channel = None
+                        if channel:
+                            try:
+                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                                await channel.send(WORLD_BOSS_ANNOUNCE_MESSAGE, allowed_mentions=allowed)
+                            except Exception:
+                                pass
+                    except Exception:
+                        await asyncio.sleep(5)
+            WORLD_BOSS_ANNOUNCE_TASK = asyncio.create_task(_world_boss_loop())
     except Exception:
         pass
 
