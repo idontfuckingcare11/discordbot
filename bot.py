@@ -12,7 +12,19 @@ import asyncio
 import datetime as dt
 import re
 
-# Music features removed
+try:
+    import yt_dlp as yt_dlp
+except Exception:
+    yt_dlp = None
+try:
+    import nacl  # noqa: F401
+    VOICE_OK = True
+except Exception:
+    VOICE_OK = False
+try:
+    import imageio_ffmpeg as _iioff
+except Exception:
+    _iioff = None
 
 try:
     # Optional .env loader if available
@@ -70,8 +82,6 @@ GUILD_ID = int(os.getenv("GUILD_ID", "1156881904394567751"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"))
 SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
 SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
-RAID_ANNOUNCE_CHANNEL_ID = int(os.getenv("RAID_ANNOUNCE_CHANNEL_ID", "1448398031107002519"))
-WORLD_BOSS_ANNOUNCE_CHANNEL_ID = int(os.getenv("WORLD_BOSS_ANNOUNCE_CHANNEL_ID", "1447677206355513526"))
 
 # (Removed siege/secret room schedules)
 
@@ -87,13 +97,13 @@ START_TIME: dt.datetime | None = None
 ANNOUNCE_TASK: asyncio.Task | None = None
 SIEGE_LINEUP_TASK: asyncio.Task | None = None
 SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
-RAID_ANNOUNCE_TASK: asyncio.Task | None = None
-WORLD_BOSS_ANNOUNCE_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
-FFA_TIMES = [0, 11, 14, 17, 20]
+FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
-WORLD_BOSS_TIMES = [(1, 0), (8, 0), (13, 0), (19, 0)]
-WORLD_BOSS_ANNOUNCE_MESSAGE = "Teleport to the Garden of Rhisis,World Boss has started!"
+WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
+FFMPEG_PATH = (os.getenv("FFMPEG_PATH") or (_iioff.get_ffmpeg_exe() if _iioff else "ffmpeg"))
+MUSIC_QUEUES: dict[int, list[dict]] = {}
+MUSIC_NOW: dict[int, dict] = {}
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -103,6 +113,8 @@ def _next_ffa_local() -> dt.datetime:
         if c > now_local:
             return c
     return candidates[0] + dt.timedelta(days=1)
+
+# (Music feature removed)
 
 # --- PERMISSION HELPERS ---
 def has_creator_role():
@@ -204,61 +216,27 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
+                        times = [(20, 30), (2, 30)]
                         candidates = []
-                        
-                        # Find next 2:00am (every day)
-                        t = now_local.replace(hour=2, minute=0, second=0, microsecond=0)
-                        if t <= now_local:
-                            t = t + dt.timedelta(days=1)
-                        candidates.append(t)
-                        
-                        # Find next Monday-Saturday at 8:00pm
-                        for days_offset in range(8):
-                            check_date = now_local + dt.timedelta(days=days_offset)
-                            weekday = check_date.weekday()  # 0=Monday, 6=Sunday
-                            if weekday < 6:  # Monday-Saturday
-                                t = check_date.replace(hour=20, minute=0, second=0, microsecond=0)
-                                if t > now_local:
-                                    candidates.append(t)
-                                    break
-                        
-                        # Find next Sunday at 10:00pm
-                        for days_offset in range(8):
-                            check_date = now_local + dt.timedelta(days=days_offset)
-                            if check_date.weekday() == 6:  # Sunday
-                                t = check_date.replace(hour=22, minute=0, second=0, microsecond=0)
-                                if t > now_local:
-                                    candidates.append(t)
-                                    break
-                        
-                        if not candidates:
-                            # Fallback: next 2:00am
-                            t = now_local.replace(hour=2, minute=0, second=0, microsecond=0)
+                        for h, m in times:
+                            t = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
                             if t <= now_local:
                                 t = t + dt.timedelta(days=1)
-                            next_time = t
-                        else:
-                            next_time = min(candidates)
-                        
+                            candidates.append(t)
+                        next_time = min(candidates)
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
-                        
                         channel = bot.get_channel(SIEGE_CHANNEL_ID)
                         if channel is None:
                             try:
                                 channel = await bot.fetch_channel(SIEGE_CHANNEL_ID)
                             except Exception:
                                 channel = None
-                        
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Siege Line-Up", "", ping_everyone=True)
                                 try:
-                                    # Schedule participant announcement
-                                    # 2:00am: announce at 3:00am (1 hour later)
-                                    # Sunday 10pm: announce at 11pm (1 hour later)
-                                    # Mon-Sat 8pm: announce at 9pm (1 hour later)
-                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 1800
                                     await _schedule_announcement(msg.id, channel, when_unix, "Guild Siege")
                                 except Exception:
                                     pass
@@ -277,53 +255,25 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
-                        candidates = []
-                        
-                        # Find next Sunday at 8:00pm
-                        for days_offset in range(8):
-                            check_date = now_local + dt.timedelta(days=days_offset)
-                            if check_date.weekday() == 6:  # Sunday
-                                t = check_date.replace(hour=20, minute=0, second=0, microsecond=0)
-                                if t > now_local:
-                                    candidates.append(t)
-                                    break
-                        
-                        # Find next Wednesday at 11:00pm
-                        for days_offset in range(8):
-                            check_date = now_local + dt.timedelta(days=days_offset)
-                            if check_date.weekday() == 2:  # Wednesday
-                                t = check_date.replace(hour=23, minute=0, second=0, microsecond=0)
-                                if t > now_local:
-                                    candidates.append(t)
-                                    break
-                        
-                        if not candidates:
-                            # Fallback: next Sunday at 8pm
-                            days_to_sunday = (6 - now_local.weekday()) % 7
-                            if days_to_sunday == 0:
-                                days_to_sunday = 7
-                            next_time = (now_local + dt.timedelta(days=days_to_sunday)).replace(hour=20, minute=0, second=0, microsecond=0)
-                        else:
-                            next_time = min(candidates)
-                        
+                        target_weekday = 2
+                        candidate = now_local.replace(hour=23, minute=0, second=0, microsecond=0)
+                        days_ahead = (target_weekday - now_local.weekday()) % 7
+                        if days_ahead == 0 and candidate <= now_local:
+                            days_ahead = 7
+                        next_time = candidate + dt.timedelta(days=days_ahead)
                         delay = max(1, int((next_time - now_local).total_seconds()))
                         await asyncio.sleep(delay)
-                        
                         channel = bot.get_channel(SECRET_ROOM_CHANNEL_ID)
                         if channel is None:
                             try:
                                 channel = await bot.fetch_channel(SECRET_ROOM_CHANNEL_ID)
                             except Exception:
                                 channel = None
-                        
                         if channel and hasattr(channel, "guild") and channel.guild:
                             try:
                                 msg = await _create_lineup_message(channel, channel.guild, "Secret Room Line-Up", "", ping_everyone=True)
                                 try:
-                                    # Schedule participant announcement
-                                    # Sunday 8pm: announce at 9pm (1 hour later)
-                                    # Wednesday 11pm: announce at 12am Thursday (1 hour later, next day)
-                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600  # 1 hour later
+                                    when_unix = int(next_time.astimezone(dt.timezone.utc).timestamp()) + 3600
                                     await _schedule_announcement(msg.id, channel, when_unix, "Secret Room")
                                 except Exception:
                                     pass
@@ -332,133 +282,6 @@ async def on_ready():
                     except Exception:
                         await asyncio.sleep(5)
             SECRET_ROOM_LINEUP_TASK = asyncio.create_task(_secret_room_loop())
-    except Exception:
-        pass
-
-    try:
-        global RAID_ANNOUNCE_TASK
-        if not RAID_ANNOUNCE_TASK or RAID_ANNOUNCE_TASK.done():
-            async def _raid_announce_loop():
-                last_announce = {}  # Track last announcement time to prevent duplicates
-                while True:
-                    try:
-                        now_local = dt.datetime.now(PH_TZ)
-                        candidates = []
-                        
-                        # Raid announcement times: 4:55am, 8:55am, 9:55pm (21:55)
-                        raid_times = [
-                            (4, 55),   # 4:55am
-                            (8, 55),   # 8:55am
-                            (21, 55),  # 9:55pm
-                        ]
-                        
-                        for hour, minute in raid_times:
-                            t = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                            if t <= now_local:
-                                t = t + dt.timedelta(days=1)
-                            candidates.append(t)
-                        
-                        next_time = min(candidates)
-                        delay = max(1, int((next_time - now_local).total_seconds()))
-                        await asyncio.sleep(delay)
-                        
-                        # Prevent duplicate announcements
-                        announce_key = f"{next_time.date()}_{next_time.hour}_{next_time.minute}"
-                        if announce_key in last_announce:
-                            continue
-                        last_announce[announce_key] = next_time
-                        # Clean old entries (keep only last 24 hours)
-                        cutoff = now_local - dt.timedelta(hours=24)
-                        last_announce = {k: v for k, v in last_announce.items() if v > cutoff}
-                        
-                        channel = bot.get_channel(RAID_ANNOUNCE_CHANNEL_ID)
-                        if channel is None:
-                            try:
-                                channel = await bot.fetch_channel(RAID_ANNOUNCE_CHANNEL_ID)
-                            except Exception:
-                                channel = None
-                        
-                        if channel:
-                            try:
-                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                                # Calculate raid start time (5 minutes after announcement)
-                                raid_start = next_time + dt.timedelta(minutes=5)
-                                raid_start_unix = int(raid_start.astimezone(dt.timezone.utc).timestamp())
-                                
-                                # Real-time countdown that updates every second
-                                async def _realtime_countdown():
-                                    try:
-                                        # Send initial message
-                                        msg = await channel.send("⚠️ Prepare your gear! Raid is coming in **5:00**", allowed_mentions=allowed)
-                                        
-                                        # Update countdown every second for 5 minutes (300 seconds)
-                                        for remaining_seconds in range(299, -1, -1):  # Count from 299 to 0
-                                            minutes = remaining_seconds // 60
-                                            seconds = remaining_seconds % 60
-                                            countdown_text = f"{minutes}:{seconds:02d}"
-                                            
-                                            try:
-                                                if remaining_seconds > 0:
-                                                    await msg.edit(content=f"⚠️ Prepare your gear! Raid is coming in **{countdown_text}**")
-                                                else:
-                                                    await msg.edit(content=f"🔥 **Raid is starting NOW!** <t:{raid_start_unix}:F>")
-                                                    break
-                                            except Exception:
-                                                # If message was deleted or can't edit, stop countdown
-                                                break
-                                            
-                                            await asyncio.sleep(1)  # Wait 1 second before next update
-                                    except Exception:
-                                        pass
-                                
-                                # Run countdown in background task
-                                asyncio.create_task(_realtime_countdown())
-                            except Exception:
-                                pass
-                    except Exception:
-                        await asyncio.sleep(5)
-            RAID_ANNOUNCE_TASK = asyncio.create_task(_raid_announce_loop())
-    except Exception:
-        pass
-
-    try:
-        global WORLD_BOSS_ANNOUNCE_TASK
-        if not WORLD_BOSS_ANNOUNCE_TASK or WORLD_BOSS_ANNOUNCE_TASK.done():
-            async def _world_boss_loop():
-                last_announce = {}
-                while True:
-                    try:
-                        now_local = dt.datetime.now(PH_TZ)
-                        candidates = []
-                        for hour, minute in WORLD_BOSS_TIMES:
-                            t = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                            if t <= now_local:
-                                t = t + dt.timedelta(days=1)
-                            candidates.append(t)
-                        next_time = min(candidates)
-                        delay = max(1, int((next_time - now_local).total_seconds()))
-                        await asyncio.sleep(delay)
-                        key = f"{next_time.date()}_{next_time.hour}_{next_time.minute}"
-                        if key in last_announce:
-                            continue
-                        last_announce[key] = next_time
-                        cutoff = now_local - dt.timedelta(hours=24)
-                        last_announce = {k: v for k, v in last_announce.items() if v > cutoff}
-                        channel = bot.get_channel(WORLD_BOSS_ANNOUNCE_CHANNEL_ID)
-                        if channel is None:
-                            try:
-                                channel = await bot.fetch_channel(WORLD_BOSS_ANNOUNCE_CHANNEL_ID)
-                            except Exception:
-                                channel = None
-                        if channel:
-                            try:
-                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                                await channel.send(WORLD_BOSS_ANNOUNCE_MESSAGE, allowed_mentions=allowed)
-                            except Exception:
-                                pass
-                    except Exception:
-                        await asyncio.sleep(5)
-            WORLD_BOSS_ANNOUNCE_TASK = asyncio.create_task(_world_boss_loop())
     except Exception:
         pass
 
@@ -512,6 +335,9 @@ async def post_message(ctx, *, message: str = None):
     except Exception as e:
         await ctx.send(f"❌ Failed to post message: {str(e)}")
 
+# (Music commands removed)
+
+
 # --- LINEUP SYSTEM ---
 # Track active line-ups by message ID
 lineups: dict[int, dict] = {}
@@ -557,48 +383,23 @@ async def on_reaction_add(reaction: nextcord.Reaction, user: nextcord.User):
     try:
         if user.bot or reaction.message.id not in lineups:
             return
-        
         guild = reaction.message.guild
         if not guild:
             return
         member = guild.get_member(user.id)
         if not member:
             return
-        
         state = lineups[reaction.message.id]
-        emoji_str = str(reaction.emoji).strip()
-        
-        # More robust emoji comparison - handle different emoji representations
-        # Check mark emoji: ✅ (U+2705) or white_check_mark
-        # X emoji: ❌ (U+274C) or x
-        is_check = (
-            emoji_str == "✅" or 
-            emoji_str == "\u2705" or
-            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('white_check_mark', '✅'))
-        )
-        is_x = (
-            emoji_str == "❌" or 
-            emoji_str == "\u274C" or
-            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('x', '❌', 'negative_squared_cross_mark'))
-        )
-        
-        if is_check:
+        if str(reaction.emoji) == "✅":
             state["no"].discard(user.id)
             state["join"].add(user.id)
-        elif is_x:
+        elif str(reaction.emoji) == "❌":
             state["join"].discard(user.id)
             state["no"].add(user.id)
         else:
             return
-        
-        # Get title from embed safely
-        title = "Line-Up"
-        if reaction.message.embeds and len(reaction.message.embeds) > 0:
-            embed_title = reaction.message.embeds[0].title or ""
-            title = embed_title.replace("⚔ ", "").replace(" ⚔", "").strip() or "Line-Up"
-        
         embed = _format_lineup_embed(
-            title,
+            reaction.message.embeds[0].title.replace("⚔ ", "").replace(" ⚔", "") if reaction.message.embeds else "Line-Up",
             guild,
             state["join"],
             state["no"],
@@ -621,37 +422,14 @@ async def on_reaction_remove(reaction: nextcord.Reaction, user: nextcord.User):
         if not guild:
             return
         state = lineups[reaction.message.id]
-        emoji_str = str(reaction.emoji).strip()
-        
-        # More robust emoji comparison - handle different emoji representations
-        # Check mark emoji: ✅ (U+2705) or white_check_mark
-        # X emoji: ❌ (U+274C) or x
-        is_check = (
-            emoji_str == "✅" or 
-            emoji_str == "\u2705" or
-            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('white_check_mark', '✅'))
-        )
-        is_x = (
-            emoji_str == "❌" or 
-            emoji_str == "\u274C" or
-            (hasattr(reaction.emoji, 'name') and reaction.emoji.name in ('x', '❌', 'negative_squared_cross_mark'))
-        )
-        
-        if is_check:
+        if str(reaction.emoji) == "✅":
             state["join"].discard(user.id)
-        elif is_x:
+        elif str(reaction.emoji) == "❌":
             state["no"].discard(user.id)
         else:
             return
-        
-        # Get title from embed safely
-        title = "Line-Up"
-        if reaction.message.embeds and len(reaction.message.embeds) > 0:
-            embed_title = reaction.message.embeds[0].title or ""
-            title = embed_title.replace("⚔ ", "").replace(" ⚔", "").strip() or "Line-Up"
-        
         embed = _format_lineup_embed(
-            title,
+            reaction.message.embeds[0].title.replace("⚔ ", "").replace(" ⚔", "") if reaction.message.embeds else "Line-Up",
             guild,
             state["join"],
             state["no"],
@@ -721,62 +499,26 @@ async def nextffa_cmd(ctx: commands.Context):
     except Exception:
         pass
 
-@bot.command(name="testraid")
+@bot.command(name="worldboss")
 @has_creator_role()
 @commands.guild_only()
-async def testraid_cmd(ctx: commands.Context):
-    """Test the raid countdown - triggers a 5-minute countdown immediately"""
+async def worldboss_cmd(ctx: commands.Context):
     try:
-        # Use the raid channel or current channel
-        channel = bot.get_channel(RAID_ANNOUNCE_CHANNEL_ID)
-        if channel is None:
+        now = dt.datetime.now(dt.timezone.utc)
+        end = now + dt.timedelta(hours=2)
+        unix_end = int(end.timestamp())
+        mins = int(((end - now).total_seconds() + 59) // 60)
+        await ctx.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)")
+        async def _task():
             try:
-                channel = await bot.fetch_channel(RAID_ANNOUNCE_CHANNEL_ID)
-            except Exception:
-                channel = ctx.channel  # Fallback to current channel
-        
-        if not channel:
-            await ctx.send("❌ Could not access raid channel.")
-            return
-        
-        allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-        
-        # Calculate raid start time (5 minutes from now)
-        now_utc = dt.datetime.now(dt.timezone.utc)
-        raid_start = now_utc + dt.timedelta(minutes=5)
-        raid_start_unix = int(raid_start.timestamp())
-        
-        # Real-time countdown that updates every second
-        async def _realtime_countdown():
-            try:
-                # Send initial message
-                msg = await channel.send("⚠️ Prepare your gear! Raid is coming in **5:00**", allowed_mentions=allowed)
-                
-                # Update countdown every second for 5 minutes (300 seconds)
-                for remaining_seconds in range(299, -1, -1):  # Count from 299 to 0
-                    minutes = remaining_seconds // 60
-                    seconds = remaining_seconds % 60
-                    countdown_text = f"{minutes}:{seconds:02d}"
-                    
-                    try:
-                        if remaining_seconds > 0:
-                            await msg.edit(content=f"⚠️ Prepare your gear! Raid is coming in **{countdown_text}**")
-                        else:
-                            await msg.edit(content=f"🔥 **Raid is starting NOW!** <t:{raid_start_unix}:F>")
-                            break
-                    except Exception:
-                        # If message was deleted or can't edit, stop countdown
-                        break
-                    
-                    await asyncio.sleep(1)  # Wait 1 second before next update
+                await asyncio.sleep(2*60*60)
+                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                await ctx.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
             except Exception:
                 pass
-        
-        # Run countdown in background task
-        asyncio.create_task(_realtime_countdown())
-        await ctx.send(f"✅ Test raid countdown started in {channel.mention}!")
-    except Exception as e:
-        await ctx.send(f"❌ Failed to start test raid: {str(e)}")
+        asyncio.create_task(_task())
+    except Exception:
+        pass
 
 @bot.command(name="reloadcmds")
 @has_creator_role()
@@ -1017,6 +759,49 @@ try:
         except Exception as e:
             await interaction.followup.send(f"❌ Failed to delete messages: {e}", ephemeral=True)
 
+    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup", guild_ids=[GUILD_ID])
+    async def siegelineup_slash(
+        interaction: nextcord.Interaction,
+        text: str = SlashOption(required=False, description="Extra text or rules"),
+        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
+        ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
+        if ts:
+            await _schedule_announcement(msg.id, interaction.channel, ts, "Guild Siege")
+        try:
+            await interaction.delete_original_message()
+        except Exception:
+            pass
+
+    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup", guild_ids=[GUILD_ID])
+    async def secretroomlineup_slash(
+        interaction: nextcord.Interaction,
+        text: str = SlashOption(required=False, description="Extra text or rules"),
+        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
+        ts = _extract_unix_timestamp(text or "")
+        if not ts:
+            ts = _infer_local_time_unix(text or "")
+        if ts:
+            await _schedule_announcement(msg.id, interaction.channel, ts, "Secret Room")
+        try:
+            await interaction.delete_original_message()
+        except Exception:
+            pass
 
 
 
@@ -1091,49 +876,234 @@ try:
             except Exception:
                 pass
 
-    @bot.slash_command(name="siegelineup", description="Create a siege participation lineup", guild_ids=[GUILD_ID])
-    async def siegelineup_slash(
-        interaction: nextcord.Interaction,
-        text: str = SlashOption(required=False, description="Extra text or rules"),
-        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
-    ):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
-        ts = _extract_unix_timestamp(text or "")
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, interaction.channel, ts, "Guild Siege")
+    def _get_queue(gid: int) -> list[dict]:
+        if gid not in MUSIC_QUEUES:
+            MUSIC_QUEUES[gid] = []
+        return MUSIC_QUEUES[gid]
+
+    async def _reply_interaction(interaction: nextcord.Interaction, text: str):
         try:
-            await interaction.delete_original_message()
+            if not interaction.response.is_done():
+                await interaction.response.send_message(text, ephemeral=True)
+            else:
+                await interaction.followup.send(text, ephemeral=True)
         except Exception:
             pass
 
-    @bot.slash_command(name="secretroomlineup", description="Create a secret room participation lineup", guild_ids=[GUILD_ID])
-    async def secretroomlineup_slash(
-        interaction: nextcord.Interaction,
-        text: str = SlashOption(required=False, description="Extra text or rules"),
-        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
-    ):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
-        ts = _extract_unix_timestamp(text or "")
-        if not ts:
-            ts = _infer_local_time_unix(text or "")
-        if ts:
-            await _schedule_announcement(msg.id, interaction.channel, ts, "Secret Room")
+    async def _ensure_voice(interaction: nextcord.Interaction) -> nextcord.VoiceClient | None:
         try:
-            await interaction.delete_original_message()
+            if not VOICE_OK:
+                await _reply_interaction(interaction, "❌ Voice not supported. Install PyNaCl.")
+                return None
+            member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+            if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
+                await _reply_interaction(interaction, "❌ You are not in a voice channel.")
+                return None
+            # Permission check before attempting connection
+            bot_member = interaction.guild.me if interaction.guild else None
+            ch = member.voice.channel
+            try:
+                if isinstance(ch, nextcord.StageChannel):
+                    await _reply_interaction(interaction, "❌ Stage channels are not supported for music. Please use a normal voice channel.")
+                    return None
+            except Exception:
+                pass
+            try:
+                perms = ch.permissions_for(bot_member) if bot_member else None
+                if not perms or not perms.connect or not perms.speak:
+                    await _reply_interaction(interaction, "❌ I need 'Connect' and 'Speak' permissions in your voice channel.")
+                    return None
+            except Exception:
+                pass
+            vc = interaction.guild.voice_client
+            if vc and vc.channel.id == member.voice.channel.id:
+                return vc
+            if vc and vc.is_connected():
+                try:
+                    try:
+                        await vc.move_to(member.voice.channel)
+                    except RuntimeError:
+                        fut = asyncio.run_coroutine_threadsafe(vc.move_to(member.voice.channel), bot.loop)
+                        fut.result(timeout=10)
+                    return vc
+                except Exception:
+                    await _reply_interaction(interaction, "❌ Failed to move to your voice channel.")
+                    return None
+            try:
+                try:
+                    vc = await member.voice.channel.connect()
+                except RuntimeError:
+                    fut = asyncio.run_coroutine_threadsafe(member.voice.channel.connect(), bot.loop)
+                    vc = fut.result(timeout=10)
+                return vc
+            except Exception as e:
+                err_text = f"❌ Failed to join voice channel: {type(e).__name__}: {e}"
+                try:
+                    err_text += "\n• Check bot 'Connect' and 'Speak' permissions\n• Ensure channel isn't full\n• Avoid Stage channels"
+                except Exception:
+                    pass
+                await _reply_interaction(interaction, err_text)
+                return None
+        except Exception:
+            return None
+
+    def _normalize_yt_url(u: str) -> str:
+        try:
+            s = (u or "").strip()
+            if "youtube.com/shorts/" in s:
+                m = re.search(r"shorts/([A-Za-z0-9_-]{6,})", s)
+                if m:
+                    return f"https://www.youtube.com/watch?v={m.group(1)}"
+            if "youtu.be/" in s:
+                m = re.search(r"youtu\.be/([A-Za-z0-9_-]{6,})", s)
+                if m:
+                    return f"https://www.youtube.com/watch?v={m.group(1)}"
+            return s
+        except Exception:
+            return u
+
+    def _yt_info(url: str) -> dict | None:
+        try:
+            if yt_dlp is None:
+                return None
+            u = _normalize_yt_url(url)
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "noplaylist": True,
+                "quiet": True,
+                "default_search": "ytsearch",
+                "nocheckcertificate": True,
+                "geo_bypass": True,
+                "extractor_retries": 3,
+                "http_headers": {"User-Agent": "Mozilla/5.0"},
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(u, download=False)
+                if info and "entries" in info:
+                    info = info["entries"][0]
+                return info
+        except Exception:
+            try:
+                ydl_opts2 = {
+                    "format": "bestaudio/best",
+                    "noplaylist": True,
+                    "quiet": True,
+                    "default_search": "ytsearch",
+                }
+                with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if info and "entries" in info:
+                        info = info["entries"][0]
+                    return info
+            except Exception:
+                return None
+
+    async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
+        try:
+            queue = _get_queue(guild_id)
+            if not queue:
+                vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
+                if vc:
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                try:
+                    await channel.send("🛑 Queue empty. Disconnected.")
+                except Exception:
+                    pass
+                return
+            item = queue[0]
+            url = item.get("url") or item.get("source_url")
+            vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
+            if not vc:
+                return
+            audio = nextcord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
+            def _after(err):
+                try:
+                    queue.pop(0)
+                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), bot.loop)
+                    fut.result()
+                except Exception:
+                    pass
+            try:
+                vc.stop()
+            except Exception:
+                pass
+            try:
+                vc.play(audio, after=_after)
+                MUSIC_NOW[guild_id] = item
+                await channel.send(f"🎵 Now playing: {item.get('title') or 'Unknown'}")
+            except Exception:
+                try:
+                    await channel.send("❌ Failed to start playback.")
+                except Exception:
+                    pass
         except Exception:
             pass
+
+    @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
+    async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        if yt_dlp is None:
+            await interaction.followup.send("❌ yt-dlp is not installed.", ephemeral=True)
+            return
+        vc = await _ensure_voice(interaction)
+        if not vc:
+            return
+        info = _yt_info(youtube_link)
+        if not info:
+            await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
+            return
+        url = info.get("url")
+        title = info.get("title")
+        q = _get_queue(interaction.guild.id)
+        q.append({"title": title, "url": url, "webpage_url": info.get("webpage_url")})
+        if vc.is_playing():
+            await interaction.followup.send(f"➕ Added to queue: {title}", ephemeral=True)
+        else:
+            await interaction.followup.send(f"🎵 Starting: {title}", ephemeral=True)
+            await _play_next(interaction.guild.id, interaction.channel)
+
+    @bot.slash_command(name="strskip", description="Skip current song", guild_ids=[GUILD_ID])
+    async def strskip(interaction: nextcord.Interaction):
+        vc = interaction.guild.voice_client if interaction.guild else None
+        if not vc or not vc.is_connected():
+            await interaction.response.send_message("❌ Bot is not in a voice channel.", ephemeral=True)
+            return
+        q = _get_queue(interaction.guild.id)
+        if not q:
+            await interaction.response.send_message("❌ Queue is empty.", ephemeral=True)
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+            return
+        try:
+            vc.stop()
+        except Exception:
+            pass
+        await interaction.response.send_message("⏭️ Skipped to next song.", ephemeral=True)
+
+    @bot.slash_command(name="strstop", description="Stop and clear queue", guild_ids=[GUILD_ID])
+    async def strstop(interaction: nextcord.Interaction):
+        vc = interaction.guild.voice_client if interaction.guild else None
+        q = _get_queue(interaction.guild.id)
+        q.clear()
+        if vc:
+            try:
+                vc.stop()
+            except Exception:
+                pass
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+        await interaction.response.send_message("🛑 Stopped playback and cleared queue.", ephemeral=True)
 
 except Exception:
     # If slash support isn't available, prefix commands still work.
