@@ -92,7 +92,7 @@ WORLD_BOSS_ANNOUNCE_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [0, 11, 14, 17, 20]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
-WORLD_BOSS_TIMES = [(13, 0), (19, 0)]
+WORLD_BOSS_TIMES = [(1, 0), (8, 0), (13, 0), (19, 0)]
 WORLD_BOSS_ANNOUNCE_MESSAGE = "Teleport to the Garden of Rhisis,World Boss has started!"
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
