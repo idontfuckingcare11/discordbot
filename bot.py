@@ -1007,7 +1007,17 @@ if __name__ == "__main__":
                         pass
                     msg = str(e).lower()
                     if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg):
-                        delay = random.randint(1200, 2400)
+                        try:
+                            min_s = int((os.getenv("CF_BACKOFF_MIN") or "1200").strip())
+                        except Exception:
+                            min_s = 1200
+                        try:
+                            max_s = int((os.getenv("CF_BACKOFF_MAX") or "2400").strip())
+                        except Exception:
+                            max_s = 2400
+                        if max_s < min_s:
+                            max_s = min_s
+                        delay = random.randint(min_s, max_s)
                         try:
                             print(f"[INFO] Backing off due to Cloudflare/429 for {delay}s", flush=True)
                         except Exception:
