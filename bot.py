@@ -13,20 +13,6 @@ import datetime as dt
 import re
 
 try:
-    import yt_dlp as yt_dlp
-except Exception:
-    yt_dlp = None
-try:
-    import nacl  # noqa: F401
-    VOICE_OK = True
-except Exception:
-    VOICE_OK = False
-try:
-    import imageio_ffmpeg as _iioff
-except Exception:
-    _iioff = None
-
-try:
     # Optional .env loader if available
     from dotenv import load_dotenv  # type: ignore
     load_dotenv()
@@ -101,9 +87,8 @@ PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
 WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
-FFMPEG_PATH = (os.getenv("FFMPEG_PATH") or (_iioff.get_ffmpeg_exe() if _iioff else "ffmpeg"))
-MUSIC_QUEUES: dict[int, list[dict]] = {}
-MUSIC_NOW: dict[int, dict] = {}
+WORLD_BOSS_CHANNEL_ID = int(os.getenv("WORLD_BOSS_CHANNEL_ID", "1447677206355513526"))
+WORLD_BOSS_TIMES = [1, 8, 13, 19]
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -113,8 +98,6 @@ def _next_ffa_local() -> dt.datetime:
         if c > now_local:
             return c
     return candidates[0] + dt.timedelta(days=1)
-
-# (Music feature removed)
 
 # --- PERMISSION HELPERS ---
 def has_creator_role():
@@ -178,7 +161,7 @@ async def on_ready():
                     try:
                         now_local = dt.datetime.now(PH_TZ)
                         candidates = []
-                        for h in FFA_TIMES:
+                        for h in WORLD_BOSS_TIMES:
                             candidates.append(now_local.replace(hour=h, minute=0, second=0, microsecond=0))
                         next_time = None
                         for c in candidates:
@@ -191,16 +174,16 @@ async def on_ready():
                         if delay < 1:
                             delay = 1
                         await asyncio.sleep(delay)
-                        channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+                        channel = bot.get_channel(WORLD_BOSS_CHANNEL_ID)
                         if channel is None:
                             try:
-                                channel = await bot.fetch_channel(ANNOUNCE_CHANNEL_ID)
+                                channel = await bot.fetch_channel(WORLD_BOSS_CHANNEL_ID)
                             except Exception:
                                 channel = None
                         if channel:
                             try:
                                 allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                                await channel.send(FFA_MESSAGE, allowed_mentions=allowed)
+                                await channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
                             except Exception:
                                 pass
                     except Exception:
@@ -519,6 +502,39 @@ async def worldboss_cmd(ctx: commands.Context):
         asyncio.create_task(_task())
     except Exception:
         pass
+
+try:
+    SlashOption = nextcord.SlashOption  # type: ignore
+    @bot.slash_command(name="worldboss", description="Start a 2-hour World Boss timer", guild_ids=[GUILD_ID])
+    async def worldboss_slash(
+        interaction: nextcord.Interaction
+    ):
+        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member or not _member_has_creator_role(member):
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            return
+        try:
+            await interaction.response.defer(ephemeral=True)
+            now = dt.datetime.now(dt.timezone.utc)
+            end = now + dt.timedelta(hours=2)
+            unix_end = int(end.timestamp())
+            mins = int(((end - now).total_seconds() + 59) // 60)
+            await interaction.followup.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
+            async def _task():
+                try:
+                    await asyncio.sleep(2*60*60)
+                    allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
+                    await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
+                except Exception:
+                    pass
+            asyncio.create_task(_task())
+        except Exception:
+            try:
+                await interaction.followup.send("❌ Failed to start World Boss timer.", ephemeral=True)
+            except Exception:
+                pass
+except Exception:
+    pass
 
 @bot.command(name="reloadcmds")
 @has_creator_role()
@@ -875,235 +891,6 @@ try:
                 await interaction.response.send_message("Failed to list commands.", ephemeral=True)
             except Exception:
                 pass
-
-    def _get_queue(gid: int) -> list[dict]:
-        if gid not in MUSIC_QUEUES:
-            MUSIC_QUEUES[gid] = []
-        return MUSIC_QUEUES[gid]
-
-    async def _reply_interaction(interaction: nextcord.Interaction, text: str):
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(text, ephemeral=True)
-            else:
-                await interaction.followup.send(text, ephemeral=True)
-        except Exception:
-            pass
-
-    async def _ensure_voice(interaction: nextcord.Interaction) -> nextcord.VoiceClient | None:
-        try:
-            if not VOICE_OK:
-                await _reply_interaction(interaction, "❌ Voice not supported. Install PyNaCl.")
-                return None
-            member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-            if not member or not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
-                await _reply_interaction(interaction, "❌ You are not in a voice channel.")
-                return None
-            # Permission check before attempting connection
-            bot_member = interaction.guild.me if interaction.guild else None
-            ch = member.voice.channel
-            try:
-                if isinstance(ch, nextcord.StageChannel):
-                    await _reply_interaction(interaction, "❌ Stage channels are not supported for music. Please use a normal voice channel.")
-                    return None
-            except Exception:
-                pass
-            try:
-                perms = ch.permissions_for(bot_member) if bot_member else None
-                if not perms or not perms.connect or not perms.speak:
-                    await _reply_interaction(interaction, "❌ I need 'Connect' and 'Speak' permissions in your voice channel.")
-                    return None
-            except Exception:
-                pass
-            vc = interaction.guild.voice_client
-            if vc and vc.channel.id == member.voice.channel.id:
-                return vc
-            if vc and vc.is_connected():
-                try:
-                    try:
-                        await vc.move_to(member.voice.channel)
-                    except RuntimeError:
-                        fut = asyncio.run_coroutine_threadsafe(vc.move_to(member.voice.channel), bot.loop)
-                        fut.result(timeout=10)
-                    return vc
-                except Exception:
-                    await _reply_interaction(interaction, "❌ Failed to move to your voice channel.")
-                    return None
-            try:
-                try:
-                    vc = await member.voice.channel.connect()
-                except RuntimeError:
-                    fut = asyncio.run_coroutine_threadsafe(member.voice.channel.connect(), bot.loop)
-                    vc = fut.result(timeout=10)
-                return vc
-            except Exception as e:
-                err_text = f"❌ Failed to join voice channel: {type(e).__name__}: {e}"
-                try:
-                    err_text += "\n• Check bot 'Connect' and 'Speak' permissions\n• Ensure channel isn't full\n• Avoid Stage channels"
-                except Exception:
-                    pass
-                await _reply_interaction(interaction, err_text)
-                return None
-        except Exception:
-            return None
-
-    def _normalize_yt_url(u: str) -> str:
-        try:
-            s = (u or "").strip()
-            if "youtube.com/shorts/" in s:
-                m = re.search(r"shorts/([A-Za-z0-9_-]{6,})", s)
-                if m:
-                    return f"https://www.youtube.com/watch?v={m.group(1)}"
-            if "youtu.be/" in s:
-                m = re.search(r"youtu\.be/([A-Za-z0-9_-]{6,})", s)
-                if m:
-                    return f"https://www.youtube.com/watch?v={m.group(1)}"
-            return s
-        except Exception:
-            return u
-
-    def _yt_info(url: str) -> dict | None:
-        try:
-            if yt_dlp is None:
-                return None
-            u = _normalize_yt_url(url)
-            ydl_opts = {
-                "format": "bestaudio/best",
-                "noplaylist": True,
-                "quiet": True,
-                "default_search": "ytsearch",
-                "nocheckcertificate": True,
-                "geo_bypass": True,
-                "extractor_retries": 3,
-                "http_headers": {"User-Agent": "Mozilla/5.0"},
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(u, download=False)
-                if info and "entries" in info:
-                    info = info["entries"][0]
-                return info
-        except Exception:
-            try:
-                ydl_opts2 = {
-                    "format": "bestaudio/best",
-                    "noplaylist": True,
-                    "quiet": True,
-                    "default_search": "ytsearch",
-                }
-                with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    if info and "entries" in info:
-                        info = info["entries"][0]
-                    return info
-            except Exception:
-                return None
-
-    async def _play_next(guild_id: int, channel: nextcord.abc.Messageable):
-        try:
-            queue = _get_queue(guild_id)
-            if not queue:
-                vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
-                if vc:
-                    try:
-                        await vc.disconnect(force=True)
-                    except Exception:
-                        pass
-                try:
-                    await channel.send("🛑 Queue empty. Disconnected.")
-                except Exception:
-                    pass
-                return
-            item = queue[0]
-            url = item.get("url") or item.get("source_url")
-            vc = bot.get_guild(guild_id).voice_client if bot.get_guild(guild_id) else None
-            if not vc:
-                return
-            audio = nextcord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
-            def _after(err):
-                try:
-                    queue.pop(0)
-                    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id, channel), bot.loop)
-                    fut.result()
-                except Exception:
-                    pass
-            try:
-                vc.stop()
-            except Exception:
-                pass
-            try:
-                vc.play(audio, after=_after)
-                MUSIC_NOW[guild_id] = item
-                await channel.send(f"🎵 Now playing: {item.get('title') or 'Unknown'}")
-            except Exception:
-                try:
-                    await channel.send("❌ Failed to start playback.")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    @bot.slash_command(name="strplay", description="Play YouTube audio in your voice channel", guild_ids=[GUILD_ID])
-    async def strplay(interaction: nextcord.Interaction, youtube_link: str = SlashOption(required=True, description="YouTube link or search")):
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
-        if yt_dlp is None:
-            await interaction.followup.send("❌ yt-dlp is not installed.", ephemeral=True)
-            return
-        vc = await _ensure_voice(interaction)
-        if not vc:
-            return
-        info = _yt_info(youtube_link)
-        if not info:
-            await interaction.followup.send("❌ Invalid or unsupported YouTube link. Try a standard watch URL or youtu.be link.", ephemeral=True)
-            return
-        url = info.get("url")
-        title = info.get("title")
-        q = _get_queue(interaction.guild.id)
-        q.append({"title": title, "url": url, "webpage_url": info.get("webpage_url")})
-        if vc.is_playing():
-            await interaction.followup.send(f"➕ Added to queue: {title}", ephemeral=True)
-        else:
-            await interaction.followup.send(f"🎵 Starting: {title}", ephemeral=True)
-            await _play_next(interaction.guild.id, interaction.channel)
-
-    @bot.slash_command(name="strskip", description="Skip current song", guild_ids=[GUILD_ID])
-    async def strskip(interaction: nextcord.Interaction):
-        vc = interaction.guild.voice_client if interaction.guild else None
-        if not vc or not vc.is_connected():
-            await interaction.response.send_message("❌ Bot is not in a voice channel.", ephemeral=True)
-            return
-        q = _get_queue(interaction.guild.id)
-        if not q:
-            await interaction.response.send_message("❌ Queue is empty.", ephemeral=True)
-            try:
-                await vc.disconnect(force=True)
-            except Exception:
-                pass
-            return
-        try:
-            vc.stop()
-        except Exception:
-            pass
-        await interaction.response.send_message("⏭️ Skipped to next song.", ephemeral=True)
-
-    @bot.slash_command(name="strstop", description="Stop and clear queue", guild_ids=[GUILD_ID])
-    async def strstop(interaction: nextcord.Interaction):
-        vc = interaction.guild.voice_client if interaction.guild else None
-        q = _get_queue(interaction.guild.id)
-        q.clear()
-        if vc:
-            try:
-                vc.stop()
-            except Exception:
-                pass
-            try:
-                await vc.disconnect(force=True)
-            except Exception:
-                pass
-        await interaction.response.send_message("🛑 Stopped playback and cleared queue.", ephemeral=True)
 
 except Exception:
     # If slash support isn't available, prefix commands still work.
