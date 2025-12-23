@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import asyncio
 import datetime as dt
 import re
+import random
 
 try:
     # Optional .env loader if available
@@ -146,11 +147,12 @@ async def on_ready():
             except Exception:
                 # Ignore if lacking permissions or API denies
                 print("    ⚠ Could not set nickname (missing permission?)", flush=True)
-        try:
-            synced = await bot.sync_application_commands(guild_id=guild.id)
-            print(f"    ✓ Synced {len(synced) if hasattr(synced,'__len__') else '?'} slash command(s) to this guild", flush=True)
-        except Exception:
-            print("    ⚠ Could not sync slash commands to this guild", flush=True)
+        if guild.id == GUILD_ID:
+            try:
+                synced = await bot.sync_application_commands(guild_id=guild.id)
+                print(f"    ✓ Synced {len(synced) if hasattr(synced,'__len__') else '?'} slash command(s) to this guild", flush=True)
+            except Exception:
+                print("    ⚠ Could not sync slash commands to this guild", flush=True)
     print("[INFO] Bot ready; siege/secret-room features removed.", flush=True)
     print("="*50 + "\n", flush=True)
     try:
@@ -1000,10 +1002,24 @@ if __name__ == "__main__":
                     await asyncio.sleep(300)
                 except Exception as e:
                     try:
-                        print(f"[ERROR] Bot start failed: {e}; retrying in 30s", flush=True)
+                        print(f"[ERROR] Bot start failed: {e}", flush=True)
                     except Exception:
                         pass
-                    await asyncio.sleep(30)
+                    msg = str(e).lower()
+                    if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg):
+                        delay = random.randint(1200, 2400)
+                        try:
+                            print(f"[INFO] Backing off due to Cloudflare/429 for {delay}s", flush=True)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(delay)
+                    else:
+                        delay = random.randint(45, 120)
+                        try:
+                            print(f"[INFO] Retrying in {delay}s", flush=True)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(delay)
 
         asyncio.run(_main())
     except KeyboardInterrupt:
