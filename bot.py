@@ -40,8 +40,6 @@ logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
     logging.disable(logging.WARNING)
 
-# (Timezone removed; siege/secret room features deleted)
-
 # --- CONFIGURATION ---
 # Token is read from environment (recommended) to avoid hardcoding secrets.
 # Set `DISCORD_TOKEN` in your environment or a .env file.
@@ -52,7 +50,8 @@ TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 BOT_STATUS = {
     "status": "initializing",
     "last_error": None,
-    "last_error_timestamp": None
+    "last_error_timestamp": None,
+    "restart_count": 0
 }
 if not TOKEN:
     _token_file = os.path.join(os.path.dirname(__file__), "bot_token.txt")
@@ -77,8 +76,6 @@ ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"
 SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
 SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
 
-# (Removed siege/secret room schedules)
-
 # --- BOT SETUP ---
 intents = nextcord.Intents.default()
 intents.message_content = True
@@ -97,6 +94,7 @@ FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
 WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
 WORLD_BOSS_CHANNEL_ID = int(os.getenv("WORLD_BOSS_CHANNEL_ID", "1447677206355513526"))
 WORLD_BOSS_TIMES = [1, 8, 13, 19]
+
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
     candidates = [
@@ -137,6 +135,9 @@ def _member_has_creator_role(member: nextcord.Member) -> bool:
 async def on_ready():
     global START_TIME
     START_TIME = dt.datetime.now(dt.timezone.utc)
+    BOT_STATUS["status"] = "online"
+    BOT_STATUS["last_error"] = None
+    
     print("\n" + "="*50, flush=True)
     print(f"[OK] Logged in as {bot.user}", flush=True)
     print(f"[OK] Bot ID: {bot.user.id}", flush=True)
@@ -201,8 +202,6 @@ async def on_ready():
     except Exception:
         pass
 
-    # Auto scheduling for Siege and Secret Room removed per user preference
-
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
@@ -252,8 +251,6 @@ async def post_message(ctx, *, message: str = None):
             pass
     except Exception as e:
         await ctx.send(f"❌ Failed to post message: {str(e)}")
-
-# (Music commands removed)
 
 
 # --- LINEUP SYSTEM ---
@@ -867,22 +864,30 @@ async def _start_keepalive():
 
 async def _main():
     await _start_keepalive()
+    
+    # Track consecutive failures
+    consecutive_failures = 0
+    max_consecutive_failures = 5
+    
     while True:
         try:
+            print(f"[INFO] Starting bot (attempt {BOT_STATUS['restart_count'] + 1})...", flush=True)
             await bot.start(TOKEN)
+            # If we reach here, connection was successful, reset counter
+            consecutive_failures = 0
             break
         except nextcord.errors.LoginFailure:
             BOT_STATUS["status"] = "login_failure"
             BOT_STATUS["last_error"] = "Invalid Token"
             BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
-            try:
-                print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
-            except Exception:
-                pass
+            print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
             await asyncio.sleep(300)
         except Exception as e:
+            consecutive_failures += 1
+            BOT_STATUS["restart_count"] += 1
+            
             msg = str(e).lower()
-            # Truncate error message for status to avoid massive HTML logs
+            # Truncate error message for status
             short_error = str(e)
             if len(short_error) > 200:
                 short_error = short_error[:200] + "... (truncated)"
@@ -893,31 +898,38 @@ async def _main():
             is_cf_error = ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg) or ("rate limited" in msg) or ("banned" in msg) or ("<!doctype html>" in msg)
 
             if is_cf_error:
-                try:
-                    print(f"[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429). Suppressing HTML output.", flush=True)
-                except Exception:
-                    pass
-            else:
-                try:
-                    print(f"[ERROR] Bot start failed: {e}", flush=True)
-                except Exception:
-                    pass
-            
-            # Handle Cloudflare/Rate Limit wait
-            if is_cf_error:
-                # Force a long wait (1-2 hours) to clear the ban
-                min_s = 3600  
-                max_s = 7200
-                delay = random.randint(min_s, max_s)
+                print(f"[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429).", flush=True)
+                
+                # Exponential backoff with jitter for Cloudflare bans
+                # Start with 30 minutes, increase with each consecutive failure
+                base_delay = 1800  # 30 minutes
+                max_delay = 14400  # 4 hours
+                
+                # Calculate exponential delay
+                delay = min(base_delay * (2 ** (consecutive_failures - 1)), max_delay)
+                # Add random jitter (±20%)
+                jitter = random.uniform(-0.2, 0.2) * delay
+                delay = int(delay + jitter)
+                
                 BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
-                try:
-                    print(f"[INFO] Sleeping for {delay}s to let the ban expire... (Do not restart manually)", flush=True)
-                except Exception:
-                    pass
+                print(f"[INFO] Consecutive failures: {consecutive_failures}", flush=True)
+                print(f"[INFO] Waiting {delay}s ({delay//60} minutes) before retry...", flush=True)
+                
+                # If too many consecutive failures, give up
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"[FATAL] Too many consecutive Cloudflare errors ({consecutive_failures}). Exiting.", flush=True)
+                    print("[FATAL] Please wait several hours before restarting, or contact Render support.", flush=True)
+                    sys.exit(1)
+                    
                 await asyncio.sleep(delay)
             else:
+                print(f"[ERROR] Bot start failed: {e}", flush=True)
                 BOT_STATUS["status"] = "error_retry_60s"
-                await asyncio.sleep(60)
+                
+                # For non-CF errors, use shorter retry with small backoff
+                retry_delay = min(60 * (2 ** (consecutive_failures - 1)), 600)  # Max 10 minutes
+                print(f"[INFO] Retrying in {retry_delay}s...", flush=True)
+                await asyncio.sleep(retry_delay)
 
 # --- RUN BOT ---
 if __name__ == "__main__":
@@ -942,7 +954,6 @@ if __name__ == "__main__":
     atexit.register(_cleanup_lock)
 
     # Lock behavior: by default, auto-clear stale lock and continue.
-    # If STRICT_SINGLE_INSTANCE=1, enforce exclusive lock like before.
     if STRICT_SINGLE_INSTANCE:
         try:
             with open(LOCK_FILE, 'x') as f:
@@ -967,7 +978,6 @@ if __name__ == "__main__":
             with open(LOCK_FILE, 'w') as f:
                 f.write(str(os.getpid()))
         except Exception:
-            # If writing fails, continue without lock to avoid blocking startup
             pass
 
     if not TOKEN:
