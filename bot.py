@@ -957,19 +957,13 @@ if __name__ == "__main__":
                         pass
                     msg = str(e).lower()
                     if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg):
-                        try:
-                            min_s = int((os.getenv("CF_BACKOFF_MIN") or "1200").strip())
-                        except Exception:
-                            min_s = 1200
-                        try:
-                            max_s = int((os.getenv("CF_BACKOFF_MAX") or "2400").strip())
-                        except Exception:
-                            max_s = 2400
-                        if max_s < min_s:
-                            max_s = min_s
+                        # Force a long wait (1-2 hours) to clear the ban
+                        min_s = 3600  
+                        max_s = 7200
                         delay = random.randint(min_s, max_s)
+                        BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
                         try:
-                            print(f"[INFO] Backing off due to Cloudflare/429 for {delay}s", flush=True)
+                            print(f"[INFO] ⚠️ Cloudflare Ban Detected (Error 1015/429). Sleeping for {delay}s...", flush=True)
                         except Exception:
                             pass
                         await asyncio.sleep(delay)
