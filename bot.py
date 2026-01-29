@@ -858,9 +858,10 @@ async def _start_keepalive():
         app.router.add_get("/healthz", _root)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", 8080)
+        port = int(os.getenv("PORT", 8080))
+        site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
-        print("[INFO] Keepalive server started on port 8080", flush=True)
+        print(f"[INFO] Keepalive server started on port {port}", flush=True)
     except Exception as e:
         print(f"[ERROR] Failed to start keepalive server: {e}", flush=True)
 
@@ -888,20 +889,29 @@ async def _main():
             BOT_STATUS["last_error"] = short_error
             BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
             
-            try:
-                print(f"[ERROR] Bot start failed: {e}", flush=True)
-            except Exception:
-                pass
+            # Check for Cloudflare/Rate Limit errors
+            is_cf_error = ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg) or ("rate limited" in msg) or ("banned" in msg) or ("<!doctype html>" in msg)
+
+            if is_cf_error:
+                try:
+                    print(f"[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429). Suppressing HTML output.", flush=True)
+                except Exception:
+                    pass
+            else:
+                try:
+                    print(f"[ERROR] Bot start failed: {e}", flush=True)
+                except Exception:
+                    pass
             
-            # Expanded Cloudflare/Rate Limit detection
-            if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg) or ("rate limited" in msg) or ("banned" in msg):
+            # Handle Cloudflare/Rate Limit wait
+            if is_cf_error:
                 # Force a long wait (1-2 hours) to clear the ban
                 min_s = 3600  
                 max_s = 7200
                 delay = random.randint(min_s, max_s)
                 BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
                 try:
-                    print(f"[INFO] ⚠️ Cloudflare Ban Detected (Error 1015/429). Sleeping for {delay}s...", flush=True)
+                    print(f"[INFO] Sleeping for {delay}s to let the ban expire... (Do not restart manually)", flush=True)
                 except Exception:
                     pass
                 await asyncio.sleep(delay)
