@@ -47,6 +47,13 @@ if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
 # Set `DISCORD_TOKEN` in your environment or a .env file.
 # Fallback: if env is empty, read token from a local file `bot_token.txt`.
 TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
+
+# Bot status tracker for health check
+BOT_STATUS = {
+    "status": "initializing",
+    "last_error": None,
+    "last_error_timestamp": None
+}
 if not TOKEN:
     _token_file = os.path.join(os.path.dirname(__file__), "bot_token.txt")
     try:
@@ -825,6 +832,84 @@ except Exception:
     pass
 
 # --- RUN BOT ---
+async def _start_keepalive():
+    try:
+        app = web.Application()
+        async def _root(request):
+            status_text = "OK"
+            if bot.is_ready():
+                 status_text += "\nBot: Online"
+            else:
+                 status_text += f"\nBot: {BOT_STATUS.get('status', 'unknown')}"
+            
+            if BOT_STATUS.get("last_error"):
+                status_text += f"\nLast Error: {BOT_STATUS['last_error']}"
+            if BOT_STATUS.get("last_error_timestamp"):
+                status_text += f"\nError Time: {BOT_STATUS['last_error_timestamp']}"
+            
+            # Check for restart command
+            if request.query.get("restart"):
+                print("[INFO] Remote restart requested via health check", flush=True)
+                sys.exit(1)
+                
+            return web.Response(text=status_text)
+            
+        app.router.add_get("/", _root)
+        app.router.add_get("/healthz", _root)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", 8080)
+        await site.start()
+        print("[INFO] Keepalive server started on port 8080", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to start keepalive server: {e}", flush=True)
+
+async def _main():
+    await _start_keepalive()
+    while True:
+        try:
+            await bot.start(TOKEN)
+            break
+        except nextcord.errors.LoginFailure:
+            BOT_STATUS["status"] = "login_failure"
+            BOT_STATUS["last_error"] = "Invalid Token"
+            BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
+            try:
+                print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
+            except Exception:
+                pass
+            await asyncio.sleep(300)
+        except Exception as e:
+            msg = str(e).lower()
+            # Truncate error message for status to avoid massive HTML logs
+            short_error = str(e)
+            if len(short_error) > 200:
+                short_error = short_error[:200] + "... (truncated)"
+            BOT_STATUS["last_error"] = short_error
+            BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
+            
+            try:
+                print(f"[ERROR] Bot start failed: {e}", flush=True)
+            except Exception:
+                pass
+            
+            # Expanded Cloudflare/Rate Limit detection
+            if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg) or ("rate limited" in msg) or ("banned" in msg):
+                # Force a long wait (1-2 hours) to clear the ban
+                min_s = 3600  
+                max_s = 7200
+                delay = random.randint(min_s, max_s)
+                BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
+                try:
+                    print(f"[INFO] ⚠️ Cloudflare Ban Detected (Error 1015/429). Sleeping for {delay}s...", flush=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(delay)
+            else:
+                BOT_STATUS["status"] = "error_retry_60s"
+                await asyncio.sleep(60)
+
+# --- RUN BOT ---
 if __name__ == "__main__":
     print("\n" + "="*50, flush=True)
     print("[STARTING] Initializing Enhanced Event Bot...", flush=True)
@@ -846,158 +931,59 @@ if __name__ == "__main__":
             pass
     atexit.register(_cleanup_lock)
 
-    try:
-        # Lock behavior: by default, auto-clear stale lock and continue.
-        # If STRICT_SINGLE_INSTANCE=1, enforce exclusive lock like before.
-        if STRICT_SINGLE_INSTANCE:
-            try:
-                with open(LOCK_FILE, 'x') as f:
-                    f.write(str(os.getpid()))
-            except FileExistsError:
-                print("\n[ERROR] ❌ Another bot instance appears to be running (lock file present).", flush=True)
-                print(f"[HELP] If no other instance is running, delete: {LOCK_FILE}", flush=True)
-                try:
-                    if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
-                        input("\nPress Enter to exit...")
-                except Exception:
-                    pass
-                sys.exit(1)
-        else:
-            # Non-strict mode: best-effort cleanup of existing lock and proceed
-            try:
-                if os.path.exists(LOCK_FILE):
-                    os.remove(LOCK_FILE)
-            except Exception:
-                pass
-            try:
-                with open(LOCK_FILE, 'w') as f:
-                    f.write(str(os.getpid()))
-            except Exception:
-                # If writing fails, continue without lock to avoid blocking startup
-                pass
-
-        if not TOKEN:
-            print("[ERROR] ❌ Bot token is not set!", flush=True)
-            print("[HELP] Options:", flush=True)
-            print("  • Set environment variable 'DISCORD_TOKEN'", flush=True)
-            print("  • Create a .env file with: DISCORD_TOKEN=your_token", flush=True)
-            print("  • Or create 'bot_token.txt' beside bot.py containing only your token", flush=True)
-            print("[HELP] Get your token from: https://discord.com/developers/applications", flush=True)
+    # Lock behavior: by default, auto-clear stale lock and continue.
+    # If STRICT_SINGLE_INSTANCE=1, enforce exclusive lock like before.
+    if STRICT_SINGLE_INSTANCE:
+        try:
+            with open(LOCK_FILE, 'x') as f:
+                f.write(str(os.getpid()))
+        except FileExistsError:
+            print("\n[ERROR] ❌ Another bot instance appears to be running (lock file present).", flush=True)
+            print(f"[HELP] If no other instance is running, delete: {LOCK_FILE}", flush=True)
             try:
                 if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
                     input("\nPress Enter to exit...")
             except Exception:
                 pass
             sys.exit(1)
-        
-        # Shared status tracker
-        BOT_STATUS = {
-            "status": "initializing",
-            "last_error": None,
-            "last_error_timestamp": None
-        }
+    else:
+        # Non-strict mode: best-effort cleanup of existing lock and proceed
+        try:
+            if os.path.exists(LOCK_FILE):
+                os.remove(LOCK_FILE)
+        except Exception:
+            pass
+        try:
+            with open(LOCK_FILE, 'w') as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            # If writing fails, continue without lock to avoid blocking startup
+            pass
 
-        async def _start_keepalive():
-            try:
-                port_env = (os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT") or "10000").strip()
-                app = web.Application()
-                async def _root(_request):
-                    status_text = "OK"
-                    if bot.is_ready():
-                         status_text += "\nBot: Online"
-                    else:
-                         status_text += f"\nBot: {BOT_STATUS['status']}"
-                    
-                    if BOT_STATUS["last_error"]:
-                        status_text += f"\nLast Error: {BOT_STATUS['last_error']}"
-                    if BOT_STATUS["last_error_timestamp"]:
-                        status_text += f"\nError Time: {BOT_STATUS['last_error_timestamp']}"
-                    return web.Response(text=status_text)
-                app.router.add_get("/", _root)
-                app.router.add_get("/healthz", _root)
-                runner = web.AppRunner(app)
-                await runner.setup()
-                site = web.TCPSite(runner, "0.0.0.0", int(port_env))
-                await site.start()
-                try:
-                    print(f"[HEALTH] Keepalive listening on 0.0.0.0:{port_env} (/, /healthz)", flush=True)
-                except Exception:
-                    pass
-            except Exception:
-                try:
-                    import traceback
-                    print("[HEALTH] Failed to start keepalive server", flush=True)
-                    traceback.print_exc()
-                except Exception:
-                    pass
-
-        async def _main():
-            await _start_keepalive()
-            while True:
-                try:
-                    BOT_STATUS["status"] = "connecting"
-                    await bot.start(TOKEN)
-                    break
-                except nextcord.errors.LoginFailure as e:
-                    BOT_STATUS["status"] = "failed_login"
-                    BOT_STATUS["last_error"] = str(e)
-                    BOT_STATUS["last_error_timestamp"] = dt.datetime.now(dt.timezone.utc).isoformat()
-                    try:
-                        print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
-                    except Exception:
-                        pass
-                    await asyncio.sleep(300)
-                except Exception as e:
-                    BOT_STATUS["status"] = "retrying"
-                    BOT_STATUS["last_error"] = str(e)
-                    BOT_STATUS["last_error_timestamp"] = dt.datetime.now(dt.timezone.utc).isoformat()
-                    try:
-                        print(f"[ERROR] Bot start failed: {e}", flush=True)
-                    except Exception:
-                        pass
-                    msg = str(e).lower()
-                    if ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg):
-                        # Force a long wait (1-2 hours) to clear the ban
-                        min_s = 3600  
-                        max_s = 7200
-                        delay = random.randint(min_s, max_s)
-                        BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
-                        try:
-                            print(f"[INFO] ⚠️ Cloudflare Ban Detected (Error 1015/429). Sleeping for {delay}s...", flush=True)
-                        except Exception:
-                            pass
-                        await asyncio.sleep(delay)
-                    else:
-                        delay = random.randint(45, 120)
-                        try:
-                            print(f"[INFO] Retrying in {delay}s", flush=True)
-                        except Exception:
-                            pass
-                        await asyncio.sleep(delay)
-
-        asyncio.run(_main())
-    except KeyboardInterrupt:
-        print("\n[STOP] Bot stopped by user", flush=True)
-    except nextcord.errors.LoginFailure:
-        print("\n[ERROR] ❌ Login failed! Invalid bot token.", flush=True)
-        print("[HELP] Your token is incorrect or has been reset.", flush=True)
-        print("[HELP] Get a new token from: https://discord.com/developers/applications", flush=True)
+    if not TOKEN:
+        print("[ERROR] ❌ Bot token is not set!", flush=True)
+        print("[HELP] Options:", flush=True)
+        print("  • Set environment variable 'DISCORD_TOKEN'", flush=True)
+        print("  • Create a .env file with: DISCORD_TOKEN=your_token", flush=True)
+        print("  • Or create 'bot_token.txt' beside bot.py containing only your token", flush=True)
+        print("[HELP] Get your token from: https://discord.com/developers/applications", flush=True)
         try:
             if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
                 input("\nPress Enter to exit...")
         except Exception:
             pass
+        sys.exit(1)
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        print("\n[STOP] Bot stopped by user", flush=True)
     except Exception as e:
         print(f"\n[ERROR] ❌ Failed to start bot: {e}", flush=True)
-        print(f"[ERROR] Error type: {type(e).__name__}", flush=True)
         import traceback
         traceback.print_exc()
-        print("\n[HELP] Common issues:", flush=True)
-        print("  1. Invalid bot token", flush=True)
-        print("  2. Bot not invited to server", flush=True)
-        print("  3. Missing intents enabled in Discord Developer Portal", flush=True)
         try:
-            if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
+             if sys.stdin and getattr(sys.stdin, "isatty", lambda: False)():
                 input("\nPress Enter to exit...")
         except Exception:
             pass
