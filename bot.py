@@ -890,12 +890,29 @@ if __name__ == "__main__":
                 pass
             sys.exit(1)
         
+        # Shared status tracker
+        BOT_STATUS = {
+            "status": "initializing",
+            "last_error": None,
+            "last_error_timestamp": None
+        }
+
         async def _start_keepalive():
             try:
                 port_env = (os.getenv("PORT") or os.getenv("KEEP_ALIVE_PORT") or "10000").strip()
                 app = web.Application()
                 async def _root(_request):
-                    return web.Response(text="OK")
+                    status_text = "OK"
+                    if bot.is_ready():
+                         status_text += "\nBot: Online"
+                    else:
+                         status_text += f"\nBot: {BOT_STATUS['status']}"
+                    
+                    if BOT_STATUS["last_error"]:
+                        status_text += f"\nLast Error: {BOT_STATUS['last_error']}"
+                    if BOT_STATUS["last_error_timestamp"]:
+                        status_text += f"\nError Time: {BOT_STATUS['last_error_timestamp']}"
+                    return web.Response(text=status_text)
                 app.router.add_get("/", _root)
                 app.router.add_get("/healthz", _root)
                 runner = web.AppRunner(app)
@@ -918,15 +935,22 @@ if __name__ == "__main__":
             await _start_keepalive()
             while True:
                 try:
+                    BOT_STATUS["status"] = "connecting"
                     await bot.start(TOKEN)
                     break
-                except nextcord.errors.LoginFailure:
+                except nextcord.errors.LoginFailure as e:
+                    BOT_STATUS["status"] = "failed_login"
+                    BOT_STATUS["last_error"] = str(e)
+                    BOT_STATUS["last_error_timestamp"] = dt.datetime.now(dt.timezone.utc).isoformat()
                     try:
                         print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
                     except Exception:
                         pass
                     await asyncio.sleep(300)
                 except Exception as e:
+                    BOT_STATUS["status"] = "retrying"
+                    BOT_STATUS["last_error"] = str(e)
+                    BOT_STATUS["last_error_timestamp"] = dt.datetime.now(dt.timezone.utc).isoformat()
                     try:
                         print(f"[ERROR] Bot start failed: {e}", flush=True)
                     except Exception:
