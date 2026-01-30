@@ -865,6 +865,12 @@ async def _start_keepalive():
 async def _main():
     await _start_keepalive()
     
+    # IMPORTANT: Wait before first connection to avoid triggering Cloudflare
+    initial_delay = int(os.getenv("STARTUP_DELAY", "90"))
+    if BOT_STATUS['restart_count'] == 0:
+        print(f"[INFO] Waiting {initial_delay}s before connecting (Cloudflare bypass)...", flush=True)
+        await asyncio.sleep(initial_delay)
+    
     # Track consecutive failures
     consecutive_failures = 0
     max_consecutive_failures = 5
@@ -900,25 +906,26 @@ async def _main():
             if is_cf_error:
                 print(f"[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429).", flush=True)
                 
-                # Exponential backoff with jitter for Cloudflare bans
-                # Start with 30 minutes, increase with each consecutive failure
-                base_delay = 1800  # 30 minutes
-                max_delay = 14400  # 4 hours
+                # Much longer exponential backoff for Cloudflare bans
+                # Start with 2 hours, increase with each consecutive failure
+                base_delay = 7200  # 2 hours
+                max_delay = 28800  # 8 hours
                 
                 # Calculate exponential delay
                 delay = min(base_delay * (2 ** (consecutive_failures - 1)), max_delay)
-                # Add random jitter (±20%)
-                jitter = random.uniform(-0.2, 0.2) * delay
+                # Add random jitter (±10%)
+                jitter = random.uniform(-0.1, 0.1) * delay
                 delay = int(delay + jitter)
                 
                 BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
                 print(f"[INFO] Consecutive failures: {consecutive_failures}", flush=True)
-                print(f"[INFO] Waiting {delay}s ({delay//60} minutes) before retry...", flush=True)
+                print(f"[INFO] Waiting {delay}s ({delay//3600}h {(delay%3600)//60}m) before retry...", flush=True)
                 
                 # If too many consecutive failures, give up
                 if consecutive_failures >= max_consecutive_failures:
                     print(f"[FATAL] Too many consecutive Cloudflare errors ({consecutive_failures}). Exiting.", flush=True)
-                    print("[FATAL] Please wait several hours before restarting, or contact Render support.", flush=True)
+                    print("[FATAL] Please wait 12-24 hours before restarting.", flush=True)
+                    print("[FATAL] Consider: 1) Using a VPN, 2) Upgrading to paid Render plan, 3) Using a different host", flush=True)
                     sys.exit(1)
                     
                 await asyncio.sleep(delay)
