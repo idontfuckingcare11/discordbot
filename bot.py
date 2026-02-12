@@ -33,12 +33,16 @@ if sys.platform == "win32":
         pass
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-logging.getLogger('nextcord').setLevel(logging.ERROR)
-logging.getLogger('nextcord.http').setLevel(logging.ERROR)
-logging.getLogger('nextcord.gateway').setLevel(logging.ERROR)
-logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
+# Mute nextcord's internal error logging to avoid duplicate/massive logs
+logging.getLogger('nextcord').setLevel(logging.CRITICAL)
+logging.getLogger('nextcord.http').setLevel(logging.CRITICAL)
+logging.getLogger('nextcord.gateway').setLevel(logging.CRITICAL)
+logging.getLogger('aiohttp.access').setLevel(logging.CRITICAL)
+logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 if (os.getenv("QUIET_LOGS", "1").strip().lower() in {"1", "true", "yes"}):
     logging.disable(logging.WARNING)
+
+# (Timezone removed; siege/secret room features deleted)
 
 # --- CONFIGURATION ---
 # Token is read from environment (recommended) to avoid hardcoding secrets.
@@ -50,8 +54,7 @@ TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 BOT_STATUS = {
     "status": "initializing",
     "last_error": None,
-    "last_error_timestamp": None,
-    "restart_count": 0
+    "last_error_timestamp": None
 }
 if not TOKEN:
     _token_file = os.path.join(os.path.dirname(__file__), "bot_token.txt")
@@ -76,6 +79,8 @@ ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "1438432294992871475"
 SIEGE_CHANNEL_ID = int(os.getenv("SIEGE_CHANNEL_ID", "1436652209487089744"))
 SECRET_ROOM_CHANNEL_ID = int(os.getenv("SECRET_ROOM_CHANNEL_ID", "1438398321663410278"))
 
+# (Removed siege/secret room schedules)
+
 # --- BOT SETUP ---
 intents = nextcord.Intents.default()
 intents.message_content = True
@@ -91,9 +96,36 @@ SECRET_ROOM_LINEUP_TASK: asyncio.Task | None = None
 PH_TZ = ZoneInfo("Asia/Manila")
 FFA_TIMES = [11, 14, 17, 20, 23, 2, 5, 8]
 FFA_MESSAGE = "REGISTER FFA NOW, FFA START SOON"
-WORLD_BOSS_MESSAGE = "World Boss Started! Prepare your gear."
-WORLD_BOSS_CHANNEL_ID = int(os.getenv("WORLD_BOSS_CHANNEL_ID", "1447677206355513526"))
-WORLD_BOSS_TIMES = [1, 8, 13, 19]
+
+# New Event Channels
+CRYSTAL_MINES_CHANNEL_ID = int(os.getenv("CRYSTAL_MINES_CHANNEL_ID", "1471515898836947058"))
+NEXUS_CHANNEL_ID = int(os.getenv("NEXUS_CHANNEL_ID", "1471515919359672534"))
+SECRET_ROOM_EVENT_CHANNEL_ID = int(os.getenv("SECRET_ROOM_EVENT_CHANNEL_ID", "1255630379977670657"))
+
+# Event Messages
+CRYSTAL_MINES_MESSAGE = "💎 **Crystal Mines** starts {time_tag}!"
+NEXUS_MESSAGE = "🌌 **Nexus** starts {time_tag}!"
+SECRET_ROOM_EVENT_MESSAGE = "🗝️ **Secret Room** starts {time_tag}!"
+SECRET_ROOM_START_MESSAGE = "🗝️ **Secret Room** has started! Join now! @everyone"
+
+# Event Schedules (hour, minute, weekday) - weekday: 0-6 (Mon-Sun), None for daily
+EVENT_SCHEDULES = [
+    # Crystal Mines
+    {"name": "Crystal Mines", "channel": CRYSTAL_MINES_CHANNEL_ID, "message": CRYSTAL_MINES_MESSAGE, "times": [(21, 0, None), (3, 0, None), (20, 0, 5)], "offset_mins": 5},
+    # Nexus
+    {"name": "Nexus", "channel": NEXUS_CHANNEL_ID, "message": NEXUS_MESSAGE, "times": [(10, 0, None), (20, 0, None), (4, 0, None)], "offset_mins": 5},
+    # Secret Room
+    {
+        "name": "Secret Room", 
+        "channel": SECRET_ROOM_EVENT_CHANNEL_ID, 
+        "message": SECRET_ROOM_EVENT_MESSAGE, 
+        "times": [(21, 0, 5)], 
+        "offset_mins": 30,
+        "lineup": True,
+        "at_start": True,
+        "start_message": SECRET_ROOM_START_MESSAGE
+    }
+]
 
 def _next_ffa_local() -> dt.datetime:
     now_local = dt.datetime.now(PH_TZ)
@@ -135,9 +167,6 @@ def _member_has_creator_role(member: nextcord.Member) -> bool:
 async def on_ready():
     global START_TIME
     START_TIME = dt.datetime.now(dt.timezone.utc)
-    BOT_STATUS["status"] = "online"
-    BOT_STATUS["last_error"] = None
-    
     print("\n" + "="*50, flush=True)
     print(f"[OK] Logged in as {bot.user}", flush=True)
     print(f"[OK] Bot ID: {bot.user.id}", flush=True)
@@ -170,37 +199,108 @@ async def on_ready():
                 while True:
                     try:
                         now_local = dt.datetime.now(PH_TZ)
-                        candidates = []
-                        for h in WORLD_BOSS_TIMES:
-                            candidates.append(now_local.replace(hour=h, minute=0, second=0, microsecond=0))
-                        next_time = None
-                        for c in candidates:
-                            if c > now_local:
-                                next_time = c
-                                break
-                        if not next_time:
-                            next_time = candidates[0] + dt.timedelta(days=1)
-                        delay = (next_time - now_local).total_seconds()
-                        if delay < 1:
-                            delay = 1
-                        await asyncio.sleep(delay)
-                        channel = bot.get_channel(WORLD_BOSS_CHANNEL_ID)
+                        next_action = None
+                        min_delay = float('inf')
+
+                        for event in EVENT_SCHEDULES:
+                            offset = event.get("offset_mins", 5)
+                            for hour, minute, weekday in event["times"]:
+                                # Create candidate for the actual event time
+                                candidate_event = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                
+                                # If weekday is specified, adjust to that weekday
+                                if weekday is not None:
+                                    days_ahead = weekday - candidate_event.weekday()
+                                    if days_ahead < 0:
+                                        days_ahead += 7
+                                    elif days_ahead == 0 and candidate_event <= now_local:
+                                        # Already passed today
+                                        days_ahead += 7
+                                    candidate_event += dt.timedelta(days=days_ahead)
+                                elif candidate_event <= now_local:
+                                    # Already passed today, move to tomorrow
+                                    candidate_event += dt.timedelta(days=1)
+                                
+                                # Check 1: Pre-announcement
+                                announce_time = candidate_event - dt.timedelta(minutes=offset)
+                                delay_announce = (announce_time - now_local).total_seconds()
+                                if 0 < delay_announce < min_delay:
+                                    min_delay = delay_announce
+                                    next_action = {
+                                        "type": "pre",
+                                        "name": event["name"],
+                                        "channel_id": event["channel"],
+                                        "message_template": event["message"],
+                                        "event_time": candidate_event,
+                                        "config": event
+                                    }
+                                
+                                # Check 2: At-start announcement (if enabled)
+                                if event.get("at_start"):
+                                    start_time = candidate_event
+                                    delay_start = (start_time - now_local).total_seconds()
+                                    if 0 < delay_start < min_delay:
+                                        min_delay = delay_start
+                                        next_action = {
+                                            "type": "start",
+                                            "name": event["name"],
+                                            "channel_id": event["channel"],
+                                            "message": event.get("start_message", f"**{event['name']}** has started!"),
+                                            "event_time": candidate_event,
+                                            "config": event
+                                        }
+
+                        if not next_action:
+                            await asyncio.sleep(60)
+                            continue
+
+                        # Wait until the next action time
+                        if min_delay > 1:
+                            await asyncio.sleep(min(min_delay, 3600))
+                            continue # Re-calculate after sleep
+
+                        # Perform the action
+                        channel = bot.get_channel(next_action["channel_id"])
                         if channel is None:
                             try:
-                                channel = await bot.fetch_channel(WORLD_BOSS_CHANNEL_ID)
+                                channel = await bot.fetch_channel(next_action["channel_id"])
                             except Exception:
                                 channel = None
+                        
                         if channel:
                             try:
-                                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                                await channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-                            except Exception:
-                                pass
-                    except Exception:
-                        await asyncio.sleep(5)
+                                allowed = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
+                                if next_action["type"] == "pre":
+                                    unix_timestamp = int(next_action["event_time"].timestamp())
+                                    time_tag = f"<t:{unix_timestamp}:R>"
+                                    final_msg = next_action["message_template"].format(time_tag=time_tag)
+                                    
+                                    # Special handling for lineup
+                                    if next_action["config"].get("lineup"):
+                                        await _create_lineup_message(channel, channel.guild, f"{next_action['name']} Line-Up", final_msg, ping_everyone=True)
+                                    else:
+                                        await channel.send(final_msg, allowed_mentions=allowed)
+                                    print(f"[INFO] Sent pre-announcement for {next_action['name']}", flush=True)
+                                
+                                elif next_action["type"] == "start":
+                                    await channel.send(next_action["message"], allowed_mentions=allowed)
+                                    print(f"[INFO] Sent start announcement for {next_action['name']}", flush=True)
+                                    
+                            except Exception as e:
+                                print(f"[ERROR] Failed action {next_action['type']} for {next_action['name']}: {e}", flush=True)
+                        
+                        # Sleep a bit to move past the trigger point
+                        await asyncio.sleep(2)
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Scheduler error: {e}", flush=True)
+                        await asyncio.sleep(10)
+
             ANNOUNCE_TASK = asyncio.create_task(_run())
     except Exception:
         pass
+
+    # Auto scheduling for Siege and Secret Room removed per user preference
 
 
 @bot.event
@@ -230,6 +330,90 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     import traceback
     traceback.print_exception(type(error), error, error.__traceback__)
 
+async def _create_lineup_message(channel, guild, title, description, ping_everyone=False):
+    """Creates a lineup message with reactions and live-updating embed."""
+    try:
+        embed = nextcord.Embed(
+            title=f"⚔️ {title} ⚔️",
+            description=f"{description}\n\n✅ **Will Join (0)**\t❌ **Not Joining (0)**\nNo one yet",
+            color=0x2ecc71 # Green
+        )
+        embed.set_footer(text="React to update your participation")
+        
+        content = "@everyone" if ping_everyone else None
+        msg = await channel.send(content=content, embed=embed)
+        await msg.add_reaction("✅")
+        await msg.add_reaction("❌")
+        return msg
+    except Exception as e:
+        print(f"[ERROR] Failed to create lineup: {e}", flush=True)
+        return None
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    await _update_lineup(payload)
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    await _update_lineup(payload)
+
+async def _update_lineup(payload):
+    if payload.user_id == bot.user.id:
+        return
+    
+    channel = bot.get_channel(payload.channel_id)
+    if not channel:
+        return
+    
+    try:
+        message = await channel.fetch_message(payload.message_id)
+        if not message.author.id == bot.user.id or not message.embeds:
+            return
+        
+        embed = message.embeds[0]
+        if "Line-Up" not in (embed.title or ""):
+            return
+            
+        # Get all reactions
+        yes_users = []
+        no_users = []
+        
+        for reaction in message.reactions:
+            if str(reaction.emoji) == "✅":
+                async for user in reaction.users():
+                    if not user.bot:
+                        yes_users.append(user.display_name)
+            elif str(reaction.emoji) == "❌":
+                async for user in reaction.users():
+                    if not user.bot:
+                        no_users.append(user.display_name)
+        
+        # Format lists
+        yes_list = "\n".join([f"• {u}" for u in yes_users]) or "No one yet"
+        no_list = "\n".join([f"• {u}" for u in no_users]) or "No one yet"
+        
+        # Split display into columns
+        # Since Discord mobile doesn't support true columns, we use a structured text layout
+        new_desc = embed.description.split("\n\n")[0] # Keep the original "starts in..." part
+        new_desc += f"\n\n✅ **Will Join ({len(yes_users)})**\t❌ **Not Joining ({len(no_users)})**\n"
+        
+        # Mix the lists side by side if possible or just stacked
+        # Simple stacked for reliability across devices
+        new_desc += f"{yes_list}\n\n" if yes_users else "No one yet\n\n"
+        if no_users:
+            new_desc += f"❌ **Not Joining ({len(no_users)})**\n{no_list}"
+            
+        new_embed = nextcord.Embed(
+            title=embed.title,
+            description=new_desc,
+            color=embed.color
+        )
+        new_embed.set_footer(text=embed.footer.text)
+        await message.edit(embed=new_embed)
+        
+    except Exception:
+        pass
+
 # --- ANNOUNCEMENT COMMANDS ---
 
 # New: Post a custom message to the announcement channel
@@ -251,6 +435,8 @@ async def post_message(ctx, *, message: str = None):
             pass
     except Exception as e:
         await ctx.send(f"❌ Failed to post message: {str(e)}")
+
+# (Music commands removed)
 
 
 # --- LINEUP SYSTEM ---
@@ -413,60 +599,6 @@ async def nextffa_cmd(ctx: commands.Context):
         await ctx.send(msg, allowed_mentions=allowed)
     except Exception:
         pass
-
-@bot.command(name="worldboss")
-@has_creator_role()
-@commands.guild_only()
-async def worldboss_cmd(ctx: commands.Context):
-    try:
-        now = dt.datetime.now(dt.timezone.utc)
-        end = now + dt.timedelta(hours=2)
-        unix_end = int(end.timestamp())
-        mins = int(((end - now).total_seconds() + 59) // 60)
-        await ctx.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)")
-        async def _task():
-            try:
-                await asyncio.sleep(2*60*60)
-                allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                await ctx.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-            except Exception:
-                pass
-        asyncio.create_task(_task())
-    except Exception:
-        pass
-
-try:
-    SlashOption = nextcord.SlashOption  # type: ignore
-    @bot.slash_command(name="worldboss", description="Start a 2-hour World Boss timer", guild_ids=[GUILD_ID])
-    async def worldboss_slash(
-        interaction: nextcord.Interaction
-    ):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        try:
-            await interaction.response.defer(ephemeral=True)
-            now = dt.datetime.now(dt.timezone.utc)
-            end = now + dt.timedelta(hours=2)
-            unix_end = int(end.timestamp())
-            mins = int(((end - now).total_seconds() + 59) // 60)
-            await interaction.followup.send(f"⏱ World Boss timer started. Starts in {mins} minutes. Ends at <t:{unix_end}:F> (<t:{unix_end}:R>)", ephemeral=True)
-            async def _task():
-                try:
-                    await asyncio.sleep(2*60*60)
-                    allowed = nextcord.AllowedMentions(everyone=False, roles=False, users=False)
-                    await interaction.channel.send(WORLD_BOSS_MESSAGE, allowed_mentions=allowed)
-                except Exception:
-                    pass
-            asyncio.create_task(_task())
-        except Exception:
-            try:
-                await interaction.followup.send("❌ Failed to start World Boss timer.", ephemeral=True)
-            except Exception:
-                pass
-except Exception:
-    pass
 
 @bot.command(name="reloadcmds")
 @has_creator_role()
@@ -864,79 +996,101 @@ async def _start_keepalive():
 
 async def _main():
     await _start_keepalive()
-    
-    # IMPORTANT: Wait before first connection to avoid triggering Cloudflare
-    initial_delay = int(os.getenv("STARTUP_DELAY", "90"))
-    if BOT_STATUS['restart_count'] == 0:
-        print(f"[INFO] Waiting {initial_delay}s before connecting (Cloudflare bypass)...", flush=True)
-        await asyncio.sleep(initial_delay)
-    
-    # Track consecutive failures
-    consecutive_failures = 0
-    max_consecutive_failures = 5
-    
     while True:
         try:
-            print(f"[INFO] Starting bot (attempt {BOT_STATUS['restart_count'] + 1})...", flush=True)
             await bot.start(TOKEN)
-            # If we reach here, connection was successful, reset counter
-            consecutive_failures = 0
             break
-        except nextcord.errors.LoginFailure:
+        except nextcord.errors.LoginFailure as e:
             BOT_STATUS["status"] = "login_failure"
-            BOT_STATUS["last_error"] = "Invalid Token"
+            BOT_STATUS["last_error"] = f"LoginFailure: {e}"
             BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
-            print("[ERROR] Invalid bot token; retrying in 300s", flush=True)
+            try:
+                print(f"[ERROR] Login Failure (401 Unauthorized): {e}", flush=True)
+                print("[WARN] This might be an invalid token OR a side-effect of an IP ban.", flush=True)
+                print("[WARN] Retrying in 300s...", flush=True)
+            except Exception:
+                pass
             await asyncio.sleep(300)
-        except Exception as e:
-            consecutive_failures += 1
-            BOT_STATUS["restart_count"] += 1
-            
+        except nextcord.errors.HTTPException as e:
+            # Explicitly handle HTTP errors to catch 429/403 separately if needed
             msg = str(e).lower()
-            # Truncate error message for status
+            if e.status == 429 or "429" in msg:
+                 raise Exception(f"HTTP 429: {msg}") # Pass to outer Cloudflare handler
+            elif e.status == 403 or "403" in msg:
+                 raise Exception(f"HTTP 403 (Access Denied): {msg}") # Pass to outer Cloudflare handler
+            else:
+                 print(f"[ERROR] HTTP Exception: {e}", flush=True)
+                 await asyncio.sleep(60)
+        except Exception as e:
+            msg = str(e).lower()
+            # Truncate error message for status to avoid massive HTML logs
             short_error = str(e)
             if len(short_error) > 200:
                 short_error = short_error[:200] + "... (truncated)"
             BOT_STATUS["last_error"] = short_error
             BOT_STATUS["last_error_timestamp"] = str(dt.datetime.now())
             
-            # Check for Cloudflare/Rate Limit errors
-            is_cf_error = ("too many requests" in msg) or ("access denied" in msg) or ("cloudflare" in msg) or ("error 1015" in msg) or ("rate limited" in msg) or ("banned" in msg) or ("<!doctype html>" in msg)
+            # Check for Cloudflare/Rate Limit errors - AGGRESSIVE CHECK
+            is_cf_error = False
+            for kw in ["too many requests", "access denied", "cloudflare", "error 1015", "rate limited", "banned", "html", "429"]:
+                if kw in msg:
+                    is_cf_error = True
+                    break
+            
+            # Special check for HTML content which usually implies a CF error page
+            if "<!doctype html>" in msg or "<html" in msg:
+                is_cf_error = True
 
             if is_cf_error:
-                print(f"[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429).", flush=True)
-                
-                # Much longer exponential backoff for Cloudflare bans
-                # Start with 2 hours, increase with each consecutive failure
-                base_delay = 7200  # 2 hours
-                max_delay = 28800  # 8 hours
-                
-                # Calculate exponential delay
-                delay = min(base_delay * (2 ** (consecutive_failures - 1)), max_delay)
-                # Add random jitter (±10%)
-                jitter = random.uniform(-0.1, 0.1) * delay
-                delay = int(delay + jitter)
-                
-                BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
-                print(f"[INFO] Consecutive failures: {consecutive_failures}", flush=True)
-                print(f"[INFO] Waiting {delay}s ({delay//3600}h {(delay%3600)//60}m) before retry...", flush=True)
-                
-                # If too many consecutive failures, give up
-                if consecutive_failures >= max_consecutive_failures:
-                    print(f"[FATAL] Too many consecutive Cloudflare errors ({consecutive_failures}). Exiting.", flush=True)
-                    print("[FATAL] Please wait 12-24 hours before restarting.", flush=True)
-                    print("[FATAL] Consider: 1) Using a VPN, 2) Upgrading to paid Render plan, 3) Using a different host", flush=True)
-                    sys.exit(1)
-                    
-                await asyncio.sleep(delay)
+                try:
+                    # Clear screen line or just print warning
+                    print(f"\n[WARN] ⚠️ Cloudflare Rate Limit detected (Error 1015/429). Suppressing HTML output.", flush=True)
+                except Exception:
+                    pass
             else:
-                print(f"[ERROR] Bot start failed: {e}", flush=True)
-                BOT_STATUS["status"] = "error_retry_60s"
+                try:
+                    print(f"[ERROR] Bot start failed: {e}", flush=True)
+                except Exception:
+                    pass
+            
+            # Handle Cloudflare/Rate Limit wait
+            if is_cf_error:
+                # Force a long wait (1-2 hours) to clear the ban
+                min_s = 3600  
+                max_s = 7200
+                delay = random.randint(min_s, max_s)
+                BOT_STATUS["status"] = f"rate_limited_wait_{delay}s"
+                try:
+                    print(f"[INFO] Sleeping for {delay}s to let the ban expire... (Do not restart manually)", flush=True)
+                except Exception:
+                    pass
                 
-                # For non-CF errors, use shorter retry with small backoff
-                retry_delay = min(60 * (2 ** (consecutive_failures - 1)), 600)  # Max 10 minutes
-                print(f"[INFO] Retrying in {retry_delay}s...", flush=True)
-                await asyncio.sleep(retry_delay)
+                # Countdown loop to reassure user the bot is alive
+                remaining = delay
+                last_print = delay + 61 # Force initial print
+                
+                while remaining > 0:
+                    # Update status for health check
+                    BOT_STATUS["status"] = f"rate_limited_wait_{remaining}s"
+                    
+                    # Log every 1 minute (60s)
+                    if (last_print - remaining) >= 60:
+                        try:
+                            mins = remaining // 60
+                            secs = remaining % 60
+                            print(f"[WAIT] ⏳ Still waiting out the ban... {mins}m {secs}s remaining", flush=True)
+                            last_print = remaining
+                        except Exception:
+                            pass
+                    
+                    step = 10 # Check every 10 seconds
+                    if remaining < step:
+                        step = remaining
+                    await asyncio.sleep(step)
+                    remaining -= step
+            else:
+                BOT_STATUS["status"] = "error_retry_60s"
+                await asyncio.sleep(60)
 
 # --- RUN BOT ---
 if __name__ == "__main__":
@@ -944,7 +1098,8 @@ if __name__ == "__main__":
     print("[STARTING] Initializing Enhanced Event Bot...", flush=True)
     print("[INFO] Press Ctrl+C to stop the bot", flush=True)
     print(f"[DEBUG] Token source: {TOKEN_SOURCE}", flush=True)
-    print(f"[DEBUG] Token present: {bool(TOKEN)}", flush=True)
+    safe_token = f"{TOKEN[:5]}...{TOKEN[-5:]}" if len(TOKEN) > 10 else "INVALID_LENGTH"
+    print(f"[DEBUG] Token present: {bool(TOKEN)} (Length: {len(TOKEN)}, Starts with: {safe_token})", flush=True)
     print("[INFO] Connecting to Discord...", flush=True)
     print("="*50 + "\n", flush=True)
     
@@ -961,6 +1116,7 @@ if __name__ == "__main__":
     atexit.register(_cleanup_lock)
 
     # Lock behavior: by default, auto-clear stale lock and continue.
+    # If STRICT_SINGLE_INSTANCE=1, enforce exclusive lock like before.
     if STRICT_SINGLE_INSTANCE:
         try:
             with open(LOCK_FILE, 'x') as f:
@@ -985,6 +1141,7 @@ if __name__ == "__main__":
             with open(LOCK_FILE, 'w') as f:
                 f.write(str(os.getpid()))
         except Exception:
+            # If writing fails, continue without lock to avoid blocking startup
             pass
 
     if not TOKEN:
