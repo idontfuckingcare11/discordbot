@@ -916,7 +916,7 @@ try:
     @bot.slash_command(name="wb", description="Start a 2-hour World Boss timer", guild_ids=[GUILD_ID])
     async def wb_slash(
         interaction: nextcord.Interaction,
-        ping_everyone: bool = SlashOption(required=False, default=False, description="Ping @everyone")
+        text: str = SlashOption(required=False, description="Boss name (Nihilus/Zadkiel)")
     ):
         member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
         if not member or not _member_has_creator_role(member):
@@ -926,11 +926,29 @@ try:
         now = dt.datetime.now(dt.timezone.utc)
         end = now + dt.timedelta(hours=2)
         end_unix = int(end.timestamp())
-        prefix = "@everyone " if ping_everyone else ""
-        msg_text = f"{prefix}Next World boss at <t:{end_unix}:F> (<t:{end_unix}:R>)."
-        allowed = nextcord.AllowedMentions(everyone=ping_everyone, roles=True, users=True)
+
+        raw_boss = (text or "").strip()
+        boss_display = None
+        boss_shout = None
+        if raw_boss:
+            lower = raw_boss.lower()
+            if lower.startswith("nih"):
+                boss_display = "Nihilus"
+                boss_shout = "NIHILUS"
+            elif lower.startswith("zad"):
+                boss_display = "Zadkiel"
+                boss_shout = "ZADKIEL"
+            else:
+                boss_display = raw_boss.title()
+                boss_shout = boss_display.upper()
+
+        if boss_display:
+            msg_text = f"Hey team, Next World Boss ({boss_display}) at <t:{end_unix}:t> (2hrs)."
+        else:
+            msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t> (2hrs)."
+        allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
         try:
-            await interaction.channel.send(msg_text, allowed_mentions=allowed)
+            await interaction.channel.send(msg_text, allowed_mentions=allowed_start)
         except Exception:
             await interaction.followup.send("❌ Failed to start World Boss timer.", ephemeral=True)
             return
@@ -938,9 +956,13 @@ try:
         async def _wb_end():
             try:
                 await asyncio.sleep(2 * 60 * 60)
-                end_prefix = "@everyone " if ping_everyone else ""
-                end_msg = f"{end_prefix}World Boss timer ended."
-                await interaction.channel.send(end_msg, allowed_mentions=allowed)
+                end_prefix = "@everyone "
+                allowed_end = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
+                if boss_shout:
+                    end_msg = f"{end_prefix}World Boss {boss_shout}!"
+                else:
+                    end_msg = f"{end_prefix}World Boss!"
+                await interaction.channel.send(end_msg, allowed_mentions=allowed_end)
             except Exception:
                 pass
 
