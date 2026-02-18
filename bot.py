@@ -936,10 +936,12 @@ try:
                 boss_display = raw_boss.title()
                 boss_shout = boss_display.upper()
 
+        caller = interaction.user.mention if interaction.user else "someone"
+
         if boss_display:
-            msg_text = f"Hey team, Next World Boss (**{boss_display}**) at <t:{end_unix}:t>."
+            msg_text = f"Hey team, Next World Boss (**{boss_display}**) at <t:{end_unix}:t>.\nRequested by {caller}"
         else:
-            msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>."
+            msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>.\nRequested by {caller}"
         allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
         try:
             await interaction.channel.send(msg_text, allowed_mentions=allowed_start)
