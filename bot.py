@@ -421,20 +421,14 @@ async def _update_lineup(payload):
 @has_creator_role()
 @commands.guild_only()
 async def post_message(ctx, *, message: str = None):
-    """Deprecated: use /postmessage instead. Still posts to current channel."""
     try:
-        if not message or not message.strip():
-            await ctx.send("❌ Provide text after `!postmessage` or use `/postmessage`.")
-            return
-        allow_everyone = "@everyone" in message
-        allowed = nextcord.AllowedMentions(everyone=allow_everyone, roles=True, users=True)
-        await ctx.send(message, allowed_mentions=allowed)
         try:
             await ctx.message.delete()
         except Exception:
             pass
-    except Exception as e:
-        await ctx.send(f"❌ Failed to post message: {str(e)}")
+        await ctx.send("Use /postmessage instead of !postmessage.")
+    except Exception:
+        pass
 
 # (Music commands removed)
 
@@ -943,7 +937,7 @@ try:
                 boss_shout = boss_display.upper()
 
         if boss_display:
-            msg_text = f"Hey team, Next World Boss ({boss_display}) at <t:{end_unix}:t> (2hrs)."
+            msg_text = f"Hey team, Next World Boss ({boss_display}) at <t:{end_unix}:t>."
         else:
             msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>."
         allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
