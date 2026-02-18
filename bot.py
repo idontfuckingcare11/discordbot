@@ -937,7 +937,7 @@ try:
                 boss_shout = boss_display.upper()
 
         if boss_display:
-            msg_text = f"Hey team, Next World Boss ({boss_display}) at <t:{end_unix}:t>."
+            msg_text = f"Hey team, Next World Boss (**{boss_display}**) at <t:{end_unix}:t>."
         else:
             msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>."
         allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
@@ -953,7 +953,7 @@ try:
                 end_prefix = "@everyone "
                 allowed_end = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
                 if boss_shout:
-                    end_msg = f"{end_prefix}World Boss {boss_shout}!"
+                    end_msg = f"{end_prefix}World Boss **{boss_shout}**!"
                 else:
                     end_msg = f"{end_prefix}World Boss!"
                 await interaction.channel.send(end_msg, allowed_mentions=allowed_end)
