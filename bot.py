@@ -945,7 +945,7 @@ try:
         if boss_display:
             msg_text = f"Hey team, Next World Boss ({boss_display}) at <t:{end_unix}:t> (2hrs)."
         else:
-            msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t> (2hrs)."
+            msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>."
         allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
         try:
             await interaction.channel.send(msg_text, allowed_mentions=allowed_start)
