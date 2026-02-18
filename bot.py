@@ -927,7 +927,7 @@ try:
         end = now + dt.timedelta(hours=2)
         end_unix = int(end.timestamp())
         prefix = "@everyone " if ping_everyone else ""
-        msg_text = f"{prefix}World Boss timer started. Ends at <t:{end_unix}:F> (<t:{end_unix}:R>)."
+        msg_text = f"{prefix}Next World boss at <t:{end_unix}:F> (<t:{end_unix}:R>)."
         allowed = nextcord.AllowedMentions(everyone=ping_everyone, roles=True, users=True)
         try:
             await interaction.channel.send(msg_text, allowed_mentions=allowed)
