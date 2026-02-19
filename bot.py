@@ -912,10 +912,6 @@ try:
         interaction: nextcord.Interaction,
         text: str = SlashOption(required=False, description="Boss name (Nihilus/Zadkiel)")
     ):
-        member = interaction.user if isinstance(interaction.user, nextcord.Member) else interaction.guild.get_member(interaction.user.id)
-        if not member or not _member_has_creator_role(member):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
         await interaction.response.defer(ephemeral=True)
         now = dt.datetime.now(dt.timezone.utc)
         end = now + dt.timedelta(hours=2)
