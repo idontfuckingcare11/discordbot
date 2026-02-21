@@ -845,7 +845,11 @@ try:
         if not member or not _member_has_creator_role(member):
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            return
         msg = await _create_lineup_message(interaction.channel, interaction.guild, "Siege Line-Up", text or "", ping_everyone=ping_everyone)
         ts = _extract_unix_timestamp(text or "")
         if not ts:
@@ -867,7 +871,11 @@ try:
         if not member or not _member_has_creator_role(member):
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            return
         msg = await _create_lineup_message(interaction.channel, interaction.guild, "Secret Room Line-Up", text or "", ping_everyone=ping_everyone)
         ts = _extract_unix_timestamp(text or "")
         if not ts:
