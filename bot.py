@@ -950,12 +950,12 @@ try:
             msg_text = f"Hey team, Next World Boss at <t:{end_unix}:t>.\nUser: {caller}"
         allowed_start = nextcord.AllowedMentions(everyone=False, roles=True, users=True)
         try:
-            await interaction.channel.send(msg_text, allowed_mentions=allowed_start)
+            msg = await interaction.channel.send(msg_text, allowed_mentions=allowed_start)
         except Exception:
             await interaction.followup.send("❌ Failed to start World Boss timer.", ephemeral=True)
             return
 
-        async def _wb_end():
+        async def _wb_end(start_message_id: int):
             try:
                 delay = 2 * 60 * 60
                 try:
@@ -965,6 +965,23 @@ try:
                 except Exception:
                     pass
                 await asyncio.sleep(delay)
+
+                # If the original start message was deleted, cancel the announcement
+                try:
+                    await interaction.channel.fetch_message(start_message_id)
+                except nextcord.errors.NotFound:
+                    try:
+                        print("[WB] Start message deleted, skipping end announcement", flush=True)
+                    except Exception:
+                        pass
+                    return
+                except Exception as e:
+                    try:
+                        print(f"[WB] Could not verify start message, skipping end announcement: {e}", flush=True)
+                    except Exception:
+                        pass
+                    return
+
                 end_prefix = "@everyone "
                 allowed_end = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
                 if boss_shout:
@@ -983,7 +1000,7 @@ try:
                     pass
 
         try:
-            asyncio.create_task(_wb_end())
+            asyncio.create_task(_wb_end(msg.id))
         except Exception:
             pass
         try:
