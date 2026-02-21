@@ -388,18 +388,20 @@ async def _update_lineup(payload):
                     if not user.bot:
                         no_users.append(user.display_name)
         
+        # Limit visible "Will Join" entries to first 8 to keep list readable
+        visible_yes = yes_users[:8]
+
         # Format lists
-        yes_list = "\n".join([f"• {u}" for u in yes_users]) or "No one yet"
+        yes_list = "\n".join([f"• {u}" for u in visible_yes]) or "No one yet"
         no_list = "\n".join([f"• {u}" for u in no_users]) or "No one yet"
         
         # Split display into columns
         # Since Discord mobile doesn't support true columns, we use a structured text layout
-        new_desc = embed.description.split("\n\n")[0] # Keep the original "starts in..." part
-        new_desc += f"\n\n✅ **Will Join ({len(yes_users)})**\t❌ **Not Joining ({len(no_users)})**\n"
-        
-        # Mix the lists side by side if possible or just stacked
-        # Simple stacked for reliability across devices
-        new_desc += f"{yes_list}\n\n" if yes_users else "No one yet\n\n"
+        new_desc = embed.description.split("\n\n")[0] # Keep the original intro text
+        new_desc += f"\n\n✅ **Will Join ({len(yes_users)})**\n"
+        new_desc += f"{yes_list}\n\n"
+
+        # Show "Not Joining" section once, below the join list
         if no_users:
             new_desc += f"❌ **Not Joining ({len(no_users)})**\n{no_list}"
             
