@@ -957,7 +957,14 @@ try:
 
         async def _wb_end():
             try:
-                await asyncio.sleep(2 * 60 * 60)
+                delay = 2 * 60 * 60
+                try:
+                    uname = getattr(interaction.user, "display_name", str(interaction.user))
+                    ch_name = getattr(interaction.channel, "name", str(interaction.channel))
+                    print(f"[WB] Timer started for {delay}s by {uname} in {ch_name}", flush=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(delay)
                 end_prefix = "@everyone "
                 allowed_end = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
                 if boss_shout:
@@ -965,8 +972,15 @@ try:
                 else:
                     end_msg = f"{end_prefix}World Boss!"
                 await interaction.channel.send(end_msg, allowed_mentions=allowed_end)
-            except Exception:
-                pass
+                try:
+                    print("[WB] End announcement sent", flush=True)
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    print(f"[WB] Failed end announcement: {e}", flush=True)
+                except Exception:
+                    pass
 
         try:
             asyncio.create_task(_wb_end())
