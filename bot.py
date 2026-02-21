@@ -977,10 +977,9 @@ try:
                     return
                 except Exception as e:
                     try:
-                        print(f"[WB] Could not verify start message, skipping end announcement: {e}", flush=True)
+                        print(f"[WB] Could not verify start message (will still announce): {e}", flush=True)
                     except Exception:
                         pass
-                    return
 
                 end_prefix = "@everyone "
                 allowed_end = nextcord.AllowedMentions(everyone=True, roles=True, users=True)
