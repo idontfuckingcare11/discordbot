@@ -686,9 +686,10 @@ try:
             display = shout = None
 
         caller   = interaction.user.mention if interaction.user else "someone"
-        msg_body = (f"Hey team, Next World Boss (**{display}**) at <t:{end_unix}:t>.\nCalled by: {caller}"
+        barrier  = "──────────────────────────────"
+        msg_body = (f"{barrier}\nHey team, Next World Boss (**{display}**) at <t:{end_unix}:t>.\nCalled by: {caller}\n{barrier}"
                     if display else
-                    f"Hey team, Next World Boss at <t:{end_unix}:t>.\nCalled by: {caller}")
+                    f"{barrier}\nHey team, Next World Boss at <t:{end_unix}:t>.\nCalled by: {caller}\n{barrier}")
         try:
             sent = await interaction.channel.send(msg_body,
                        allowed_mentions=nextcord.AllowedMentions(everyone=False, roles=True, users=True))
@@ -697,16 +698,29 @@ try:
             return
 
         async def _end(start_id: int):
+            try:
+                print(f"[WB] Timer started for 7200s (2h) for boss: {shout or 'None'}", flush=True)
+            except Exception:
+                pass
             await asyncio.sleep(7200)
             try:
                 await interaction.channel.fetch_message(start_id)
             except nextcord.errors.NotFound:
+                try:
+                    print(f"[WB] Cancelled: start message {start_id} not found (deleted).", flush=True)
+                except Exception:
+                    pass
                 return
             except Exception:
                 pass
-            end_txt = (f"@everyone World Boss **{shout}**!" if shout else "@everyone World Boss!")
-            await interaction.channel.send(end_txt,
-                allowed_mentions=nextcord.AllowedMentions(everyone=True, roles=True, users=True))
+            
+            end_txt = (f"{barrier}\n@everyone World Boss UP (**{shout}**)\n{barrier}" if shout else f"{barrier}\n@everyone World Boss UP\n{barrier}")
+            try:
+                await interaction.channel.send(end_txt,
+                    allowed_mentions=nextcord.AllowedMentions(everyone=True, roles=True, users=True))
+                print(f"[WB] Announcement sent: {end_txt}", flush=True)
+            except Exception as e:
+                print(f"[WB] Failed to send announcement: {e}", flush=True)
 
         asyncio.create_task(_end(sent.id))
         try:
